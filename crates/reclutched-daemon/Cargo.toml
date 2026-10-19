@@ -1,0 +1,8 @@
+[package]
+name = "reclutched-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reclutched-core = { path = "../reclutched-core" }

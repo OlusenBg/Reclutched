@@ -1,0 +1,15 @@
+[package]
+name = "reclutched-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The single shipped binary is called `reclutched`.
+[[bin]]
+name = "reclutched"
+path = "src/main.rs"
+
+[dependencies]
+reclutched-core = { path = "../reclutched-core" }
+reclutched-daemon = { path = "../reclutched-daemon" }
+clap.workspace = true
