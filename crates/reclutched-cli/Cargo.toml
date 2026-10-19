@@ -13,3 +13,6 @@ path = "src/main.rs"
 reclutched-core = { path = "../reclutched-core" }
 reclutched-daemon = { path = "../reclutched-daemon" }
 clap.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true

@@ -6,3 +6,8 @@ license.workspace = true
 
 [dependencies]
 reclutched-core = { path = "../reclutched-core" }
+anyhow.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
