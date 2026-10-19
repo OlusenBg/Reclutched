@@ -13,8 +13,20 @@ enum Command {
     /// Print raw Rocket League Stats API events to the terminal.
     Dump {
         /// Address of the Stats API websocket.
-        #[arg(long, default_value = "127.0.0.1:49123")]
+        #[arg(long, default_value = "127.0.0.1:49124")]
         addr: String,
+        /// Print decoded events instead of the raw lines.
+        #[arg(long)]
+        parsed: bool,
+    },
+    /// Learn which playlist id is which game mode: play a match, then answer what it was.
+    Map {
+        /// Address of the Stats API websocket.
+        #[arg(long, default_value = "127.0.0.1:49124")]
+        addr: String,
+        /// Where to save the answers (default: ~/.config/reclutched/playlist_map.json).
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
     },
 }
 
@@ -30,10 +42,19 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match Cli::parse().command {
-        Command::Dump { addr } => {
+        Command::Dump { addr, parsed } => {
             // Run until Ctrl-C; `select!` returns as soon as either branch finishes.
             tokio::select! {
-                res = reclutched_daemon::dump::run(&addr) => res,
+                _ = reclutched_daemon::dump::run(&addr, parsed) => Ok(()),
+                _ = tokio::signal::ctrl_c() => Ok(()),
+            }
+        }
+        Command::Map { addr, file } => {
+            let path = file
+                .or_else(reclutched_core::rocketleague::playlist::default_map_path)
+                .ok_or_else(|| anyhow::anyhow!("cannot find your home folder; pass --file"))?;
+            tokio::select! {
+                res = reclutched_daemon::map::run(&addr, path) => res,
                 _ = tokio::signal::ctrl_c() => Ok(()),
             }
         }

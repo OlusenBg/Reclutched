@@ -1,35 +1,22 @@
-//! Stage 1, step 1: connect to the Rocket League Stats API and print every raw message.
+//! Prints every Stats API message to the terminal.
 
-use std::time::Duration;
+use reclutched_core::rocketleague::parse_message;
 
-use anyhow::Result;
-use futures_util::StreamExt;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use crate::source;
 
-/// How long to wait before retrying when the game isn't running yet.
-const RETRY_DELAY: Duration = Duration::from_secs(2);
-
-/// Connects to the Stats API at `addr` (e.g. "127.0.0.1:49123") and prints raw messages
-/// until the process is stopped. If the game isn't up, keeps retrying quietly.
-pub async fn run(addr: &str) -> Result<()> {
-    let url = format!("ws://{addr}");
-    loop {
-        match connect_async(&url).await {
-            Ok((mut ws, _response)) => {
-                tracing::info!("connected to {url}");
-                // `ws` is a Stream of messages; `.next().await` yields the next one,
-                // or `None` when the connection closes.
-                while let Some(msg) = ws.next().await {
-                    match msg? {
-                        Message::Text(text) => println!("{text}"),
-                        Message::Close(_) => break,
-                        _ => {} // ping/pong/binary: nothing to print
-                    }
-                }
-                tracing::info!("connection closed, will retry");
-            }
-            Err(err) => tracing::debug!("cannot connect to {url} yet: {err}"),
+/// With `parsed`, prints the decoded event instead of the raw line.
+/// Runs until the process is stopped.
+pub async fn run(addr: &str, parsed: bool) {
+    let mut rx = source::spawn(addr);
+    while let Some(raw) = rx.recv().await {
+        if !parsed {
+            println!("{raw}");
+            continue;
         }
-        tokio::time::sleep(RETRY_DELAY).await;
+        match parse_message(&raw) {
+            Ok(event) => println!("{event:?}"),
+            // Show the problem and the line, so a new payload shape is easy to report.
+            Err(err) => eprintln!("could not parse ({err}): {raw}"),
+        }
     }
 }

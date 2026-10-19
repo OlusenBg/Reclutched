@@ -1,1 +1,3 @@
 target/
+# raw game captures stay local (scrubbed fixtures live under tests/fixtures)
+/*.jsonl

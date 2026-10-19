@@ -1,0 +1,5 @@
+{"Event":"CrossbarHit","Data":{"MatchGuid":"A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6","BallLocation":{"X":120,"Y":-2944,"Z":320},"BallSpeed":870.3,"ImpactForce":127.5,"BallLastTouch":{"Player":{"Name":"PlayerA","Shortcut":1,"TeamNum":0},"Speed":120}}}
+{"Event":"GoalReplayWillEnd","Data":{"MatchGuid":"A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6"}}
+{"Event":"PodiumStart","Data":{"MatchGuid":"A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6"}}
+{"Event":"ReplayCreated","Data":{"MatchGuid":"A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6","FileName":"Stadium_P_2026-06-05_18-42","Date":"2026-06-05 18:42:13"}}
+{"Event":"StatfeedEvent","Data":{"MatchGuid":"A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6","EventName":"Demolish","Type":"Demolition","MainTarget":{"Name":"PlayerA","Shortcut":1,"TeamNum":0},"SecondaryTarget":{"Name":"PlayerB","Shortcut":2,"TeamNum":1}}}
