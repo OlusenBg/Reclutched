@@ -15,21 +15,28 @@ pub const TOGGLES: &[(&str, &str)] = &[
         "roster",
         "who played, final stats per player, who joined/left and when",
     ),
-    ("goals", "every goal: scorer, assist, speed, position, time"),
+    (
+        "goals",
+        "every goal: scorer, assist, speed, position, time, boost at the moment",
+    ),
     (
         "stat_events",
-        "shots, saves, demolitions, MVP and the rest of the stat feed",
+        "shots, saves, demolitions, MVP...: the events plus your boost/speed when they happened",
     ),
-    ("ball_hits", "every ball touch: who, speed, position"),
+    (
+        "ball_hits",
+        "ball touches as averages per player: counts, field thirds, hit speed",
+    ),
     (
         "boost_pickups",
-        "boost pad pickups (the game only sends these while spectating)",
+        "boost pad pickup counts (the game only sends these while spectating)",
     ),
-    ("crossbar_hits", "crossbar hits"),
+    ("crossbar_hits", "crossbar hit counts and the hardest hit"),
     (
         "movement",
-        "boost use and speed habits (averages kept per match, not raw samples)",
+        "boost, speed, powerslide and demolished habits (averages per match, no raw samples)",
     ),
+    ("possession", "ball possession % and ball speed"),
     (
         "offline_matches",
         "also store offline matches (bots, exhibition, training)",
@@ -57,6 +64,7 @@ pub struct Settings {
     pub boost_pickups: bool,
     pub crossbar_hits: bool,
     pub movement: bool,
+    pub possession: bool,
     pub offline_matches: bool,
     /// Your own player id, remembered after the first tracked match (not a switch).
     pub my_primary_id: Option<String>,
@@ -73,6 +81,7 @@ impl Default for Settings {
             boost_pickups: true,
             crossbar_hits: true,
             movement: true,
+            possession: true,
             offline_matches: false,
             my_primary_id: None,
         }
@@ -113,6 +122,7 @@ impl Settings {
             "boost_pickups" => self.boost_pickups,
             "crossbar_hits" => self.crossbar_hits,
             "movement" => self.movement,
+            "possession" => self.possession,
             "offline_matches" => self.offline_matches,
             _ => return None,
         })
@@ -129,6 +139,7 @@ impl Settings {
             "boost_pickups" => &mut self.boost_pickups,
             "crossbar_hits" => &mut self.crossbar_hits,
             "movement" => &mut self.movement,
+            "possession" => &mut self.possession,
             "offline_matches" => &mut self.offline_matches,
             _ => return false,
         };

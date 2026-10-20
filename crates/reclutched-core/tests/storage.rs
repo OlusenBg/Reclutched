@@ -36,7 +36,11 @@ fn saved_match_can_be_read_back() {
     assert_eq!(count(&store, "match_players"), m.players.len() as i64);
     assert_eq!(count(&store, "goals"), m.goals.len() as i64);
     assert_eq!(count(&store, "stat_events"), m.stat_events.len() as i64);
-    assert_eq!(count(&store, "ball_hits"), m.ball_hits.len() as i64);
+    assert_eq!(count(&store, "player_touches"), m.touches.len() as i64);
+    assert_eq!(
+        count(&store, "player_event_stats"),
+        m.event_stats.len() as i64
+    );
     assert_eq!(count(&store, "player_movement"), m.movement.len() as i64);
 
     let rows = store.recent_matches(10).unwrap();
@@ -84,7 +88,10 @@ fn deleting_a_match_deletes_its_rows() {
         "match_players",
         "goals",
         "stat_events",
-        "ball_hits",
+        "player_touches",
+        "player_event_stats",
+        "player_crossbar",
+        "player_pickups",
         "player_movement",
     ] {
         assert_eq!(count(&store, table), 0, "{table}");
@@ -106,7 +113,7 @@ fn file_database_reopens_and_refuses_a_newer_schema() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     drop(store);
 
     // A database from a future version must not be touched.
@@ -136,4 +143,31 @@ fn a_match_is_small_on_disk() {
     assert!(size < 200_000, "database is {size} bytes");
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn match_detail_reads_back_what_was_saved() {
+    let m = real_match();
+    let mut store = Store::open_in_memory().unwrap();
+    assert_eq!(store.latest_match_id().unwrap(), None);
+    assert!(store.match_detail(1).unwrap().is_none());
+
+    let id = store.save_match(&m).unwrap().unwrap();
+    assert_eq!(store.latest_match_id().unwrap(), Some(id));
+    let d = store.match_detail(id).unwrap().unwrap();
+
+    assert_eq!(d.row.result, "win");
+    assert_eq!(d.my_slot, m.my_slot);
+    assert_eq!(d.players.len(), m.players.len());
+    assert!(d.players[m.my_slot].is_me);
+    assert_eq!(d.movement.len(), m.movement.len());
+    assert_eq!(d.touches.len(), m.touches.len());
+    assert_eq!(d.event_stats.len(), m.event_stats.len());
+    assert_eq!(d.my_possession_pct, m.my_possession_pct);
+    // Whole-number storage: speeds come back rounded.
+    assert_eq!(d.ball_max_speed, m.ball_max_speed.map(|v| v.round() as i64));
+    if let (Some(a), Some(b)) = (d.movement.first(), m.movement.first()) {
+        assert!((a.avg_boost - b.avg_boost).abs() < 1e-9);
+        assert_eq!(a.times_demolished, b.times_demolished);
+    }
 }

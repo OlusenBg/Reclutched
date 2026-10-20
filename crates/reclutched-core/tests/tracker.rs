@@ -46,12 +46,32 @@ fn player(shortcut: i64, name: &str, team: i64, score: i64, boost: Option<i64>) 
     p
 }
 
+/// Adds or overrides fields of a player JSON (e.g. `Speed`, `bPowersliding`).
+fn with(mut p: Value, fields: Value) -> Value {
+    for (k, v) in fields.as_object().unwrap() {
+        p[k] = v.clone();
+    }
+    p
+}
+
 fn state(
     playlist: i64,
     remaining: i64,
     players: Vec<Value>,
     me: &str,
     scores: [i64; 2],
+) -> StatsEvent {
+    state_ball(playlist, remaining, players, me, scores, (0.0, 255))
+}
+
+/// Like `state`, with the ball's speed and the team that touched it last.
+fn state_ball(
+    playlist: i64,
+    remaining: i64,
+    players: Vec<Value>,
+    me: &str,
+    scores: [i64; 2],
+    ball: (f64, i64),
 ) -> StatsEvent {
     let target = players.iter().find(|p| p["Name"] == me).unwrap();
     event(
@@ -64,7 +84,7 @@ fn state(
                     {"Name":"Orange","TeamNum":1,"Score":scores[1],"ColorPrimary":"0","ColorSecondary":"0"}
                 ],
                 "PlaylistId": playlist, "TimeSeconds": remaining, "bOvertime": false,
-                "Ball": {"Speed": 0.0, "TeamNum": 255}, "bReplay": false, "bHasWinner": false,
+                "Ball": {"Speed": ball.0, "TeamNum": ball.1}, "bReplay": false, "bHasWinner": false,
                 "Winner": "", "Arena": "Stadium_P", "bHasTarget": true,
                 "Target": {"Name": me, "Shortcut": target["Shortcut"], "TeamNum": target["TeamNum"]}
             }
@@ -96,7 +116,7 @@ fn real_online_match_becomes_a_win_with_one_goal() {
     assert!(goal.score_after.is_some());
 
     assert!(m.stat_events.iter().any(|s| s.name == "Shot"));
-    assert!(!m.ball_hits.is_empty());
+    assert!(!m.touches.is_empty());
     assert!(!m.movement.is_empty(), "teammates and you have boost data");
     // We learned who we are (a real id, not a bot id).
     assert!(tracker.take_learned_id().unwrap().starts_with("Epic|"));
@@ -125,12 +145,15 @@ fn switches_turn_collectors_off() {
         goals: false,
         stat_events: false,
         ball_hits: false,
+        possession: false,
         movement: false,
         roster: false,
         ..Settings::default()
     };
     let m = run(settings, &events).0.unwrap();
-    assert!(m.goals.is_empty() && m.stat_events.is_empty() && m.ball_hits.is_empty());
+    assert!(m.goals.is_empty() && m.stat_events.is_empty() && m.event_stats.is_empty());
+    assert!(m.touches.is_empty() && m.crossbar.is_empty() && m.pickups.is_empty());
+    assert!(m.my_possession_pct.is_none() && m.team_empty_overlap.is_none());
     assert!(m.movement.is_empty());
     // Roster off: slots and teams remain, but no names, ids or stats.
     assert!(m
@@ -159,6 +182,7 @@ fn watching_someone_else_is_not_recorded() {
     assert!(run(settings, &fixture("casual_2v2.jsonl")).0.is_none());
 }
 
+/// A 2v2 start: countdown (not sampled), then two live ticks: boost 100/0, then 0/0.
 fn two_v_two(playlist: i64) -> Vec<StatsEvent> {
     let players = |boosts: [i64; 2]| {
         vec![
@@ -170,9 +194,11 @@ fn two_v_two(playlist: i64) -> Vec<StatsEvent> {
     };
     vec![
         event("MatchCreated", guid()),
-        state(playlist, 300, players([100, 0]), "Me", [0, 0]),
+        event("CountdownBegin", guid()),
+        state(playlist, 300, players([33, 33]), "Me", [0, 0]),
         event("RoundStarted", guid()),
-        state(playlist, 299, players([0, 0]), "Me", [0, 0]),
+        state(playlist, 299, players([100, 0]), "Me", [0, 0]),
+        state(playlist, 298, players([0, 0]), "Me", [0, 0]),
     ]
 }
 
@@ -202,7 +228,7 @@ fn leaving_without_match_ended_is_an_abandon() {
     events.push(event("MatchDestroyed", guid()));
     let m = run(Settings::default(), &events).0.unwrap();
     assert_eq!(m.result, MatchResult::Abandoned);
-    assert_eq!(m.abandoned_clock.unwrap().remaining, 299);
+    assert_eq!(m.abandoned_clock.unwrap().remaining, 298);
 }
 
 #[test]
@@ -232,7 +258,7 @@ fn leaver_keeps_last_seen_stats_and_leave_time() {
     let m = run(Settings::default(), &events).0.unwrap();
     let foe = m.players.iter().find(|p| p.name == "Foe1").unwrap();
     assert_eq!(foe.score, 20);
-    assert_eq!(foe.left.unwrap().remaining, 299);
+    assert_eq!(foe.left.unwrap().remaining, 298);
 }
 
 #[test]
@@ -270,4 +296,357 @@ fn a_new_match_closes_the_previous_one() {
         .collect();
     assert_eq!(finished.len(), 1);
     assert_eq!(finished[0].result, MatchResult::Win);
+}
+
+/// Runs synthetic events and returns the finished match (the last event must end the match).
+fn finish(mut events: Vec<StatsEvent>) -> FinishedMatch {
+    events.push(event(
+        "MatchEnded",
+        json!({ "MatchGuid": "G1", "WinnerTeamNum": 0 }),
+    ));
+    events.push(event("MatchDestroyed", guid()));
+    run(Settings::default(), &events).0.expect("recorded")
+}
+
+fn me_movement(m: &FinishedMatch) -> &reclutched_core::rocketleague::tracker::MovementSummary {
+    m.movement.iter().find(|s| s.slot == m.my_slot).unwrap()
+}
+
+fn pair(me: Value, mate: Value) -> Vec<Value> {
+    vec![
+        me,
+        mate,
+        player(3, "Foe1", 1, 0, None),
+        player(4, "Foe2", 1, 0, None),
+    ]
+}
+
+#[test]
+fn countdown_and_replay_ticks_are_not_sampled() {
+    let live = |boost: i64| {
+        state(
+            11,
+            100,
+            pair(
+                player(1, "Me", 0, 0, Some(boost)),
+                player(2, "Mate", 0, 0, Some(boost)),
+            ),
+            "Me",
+            [0, 0],
+        )
+    };
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("CountdownBegin", guid()),
+        live(33), // countdown: ignored
+        event("RoundStarted", guid()),
+        live(100),
+        event("GoalReplayStart", guid()),
+        live(0), // replay: ignored
+        event("GoalReplayEnd", guid()),
+        event("CountdownBegin", guid()),
+        live(33), // next countdown: ignored
+        event("RoundStarted", guid()),
+        live(50),
+    ]);
+    let me = me_movement(&m);
+    assert_eq!(me.samples, 2);
+    assert!((me.avg_boost - 75.0).abs() < 1e-9);
+}
+
+#[test]
+fn boost_used_and_gained_come_from_changes_between_live_ticks() {
+    let tick = |boost: i64| {
+        state(
+            11,
+            100,
+            pair(
+                player(1, "Me", 0, 0, Some(boost)),
+                player(2, "Mate", 0, 0, Some(50)),
+            ),
+            "Me",
+            [0, 0],
+        )
+    };
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("RoundStarted", guid()),
+        tick(100),
+        tick(60), // used 40
+        tick(90), // gained 30
+        tick(90),
+        // A goal ends the round; the jump to the kickoff boost must not count as a pickup.
+        event("GoalReplayStart", guid()),
+        event("GoalReplayEnd", guid()),
+        event("CountdownBegin", guid()),
+        event("RoundStarted", guid()),
+        tick(33),
+    ]);
+    let me = me_movement(&m);
+    assert_eq!((me.boost_used, me.boost_gained), (40, 30));
+    assert_eq!(me.samples, 5);
+}
+
+#[test]
+fn speed_powerslide_air_and_boost_bands() {
+    let tick = |boost: i64, extra: Value| {
+        let me = with(player(1, "Me", 0, 0, Some(boost)), extra);
+        state(
+            11,
+            100,
+            pair(me, player(2, "Mate", 0, 0, Some(10))),
+            "Me",
+            [0, 0],
+        )
+    };
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("RoundStarted", guid()),
+        tick(
+            0,
+            json!({"Speed": 1000.0, "bOnGround": true, "bOnWall": false, "bPowersliding": true}),
+        ),
+        tick(
+            20,
+            json!({"Speed": 2300.0, "bSupersonic": true, "bOnGround": false, "bOnWall": false}),
+        ),
+        tick(
+            50,
+            json!({"Speed": 1500.0, "bOnGround": false, "bOnWall": true}),
+        ),
+        tick(
+            90,
+            json!({"Speed": 1200.0, "bOnGround": true, "bOnWall": false}),
+        ),
+    ]);
+    let me = me_movement(&m);
+    assert!((me.avg_speed - 1500.0).abs() < 1e-9);
+    assert_eq!(me.max_speed, 2300.0);
+    for (name, got, want) in [
+        ("empty", me.pct_boost_empty, 25.0),
+        ("low", me.pct_boost_low, 25.0),
+        ("mid", me.pct_boost_mid, 25.0),
+        ("high", me.pct_boost_high, 25.0),
+        ("supersonic", me.pct_supersonic, 25.0),
+        ("powerslide", me.pct_powersliding, 25.0),
+        ("ground", me.pct_on_ground, 50.0),
+        ("wall", me.pct_on_wall, 25.0),
+        ("airborne", me.pct_airborne, 25.0),
+    ] {
+        assert!((got - want).abs() < 1e-9, "{name}: {got}");
+    }
+}
+
+#[test]
+fn demolished_time_and_count_and_no_fake_pickup_on_respawn() {
+    let alive = |boost: i64| {
+        state(
+            11,
+            100,
+            pair(
+                player(1, "Me", 0, 0, Some(boost)),
+                player(2, "Mate", 0, 0, Some(50)),
+            ),
+            "Me",
+            [0, 0],
+        )
+    };
+    let dead = || {
+        let me = with(
+            player(1, "Me", 0, 0, Some(0)),
+            json!({"bDemolished": true, "bHasCar": false}),
+        );
+        state(
+            11,
+            100,
+            pair(me, player(2, "Mate", 0, 0, Some(50))),
+            "Me",
+            [0, 0],
+        )
+    };
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("RoundStarted", guid()),
+        alive(50),
+        dead(),
+        dead(),
+        alive(33), // respawn with the starting boost
+    ]);
+    let me = me_movement(&m);
+    assert_eq!(me.times_demolished, 1);
+    assert!((me.pct_demolished - 50.0).abs() < 1e-9);
+    assert_eq!((me.boost_used, me.boost_gained), (0, 0));
+}
+
+#[test]
+fn possession_ignores_untouched_ball_and_uses_my_team() {
+    let tick = |team: i64, speed: f64| {
+        state_ball(
+            11,
+            100,
+            pair(
+                player(1, "Me", 0, 0, Some(50)),
+                player(2, "Mate", 0, 0, Some(50)),
+            ),
+            "Me",
+            [0, 0],
+            (speed, team),
+        )
+    };
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("RoundStarted", guid()),
+        tick(255, 0.0),
+        tick(1, 1000.0),
+        tick(1, 2000.0),
+        tick(0, 3000.0),
+    ]);
+    assert!((m.my_possession_pct.unwrap() - 100.0 / 3.0).abs() < 1e-9);
+    assert!((m.ball_avg_speed.unwrap() - 1500.0).abs() < 1e-9);
+    assert_eq!(m.ball_max_speed, Some(3000.0));
+}
+
+#[test]
+fn touches_are_split_in_thirds_from_each_teams_point_of_view() {
+    let hit = |name: &str, shortcut: i64, team: i64, y: f64, speed: f64| {
+        event(
+            "BallHit",
+            json!({
+                "MatchGuid": "G1",
+                "Players": [{"Name": name, "Shortcut": shortcut, "TeamNum": team}],
+                "Ball": {"PreHitSpeed": 0.0, "PostHitSpeed": speed, "Location": {"X": 0.0, "Y": y, "Z": 90.0}}
+            }),
+        )
+    };
+    let mut events = two_v_two(11);
+    events.extend([
+        hit("Me", 1, 0, 3000.0, 1000.0),  // blue attacks +Y: attacking third
+        hit("Me", 1, 0, -3000.0, 2000.0), // defensive third
+        hit("Me", 1, 0, 0.0, 3000.0),     // middle
+        hit("Foe1", 3, 1, 3000.0, 500.0), // orange attacks -Y: +Y is their defensive third
+        event("GoalReplayStart", guid()),
+        hit("Me", 1, 0, 0.0, 9999.0), // during a replay: ignored
+    ]);
+    let m = finish(events);
+    let me = m.touches.iter().find(|t| t.slot == m.my_slot).unwrap();
+    assert_eq!(
+        (me.touches, me.def_third, me.mid_third, me.att_third),
+        (3, 1, 1, 1)
+    );
+    assert!((me.avg_post_speed - 2000.0).abs() < 1e-9);
+    assert_eq!(me.max_post_speed, 3000.0);
+    let foe = m.touches.iter().find(|t| t.slot != m.my_slot).unwrap();
+    assert_eq!((foe.touches, foe.def_third, foe.att_third), (1, 1, 0));
+}
+
+#[test]
+fn stat_events_remember_boost_and_speed_and_average_them() {
+    let tick = |boost: i64, speed: f64| {
+        state(
+            11,
+            100,
+            pair(
+                with(player(1, "Me", 0, 0, Some(boost)), json!({"Speed": speed})),
+                player(2, "Mate", 0, 0, Some(50)),
+            ),
+            "Me",
+            [0, 0],
+        )
+    };
+    let save = || {
+        event(
+            "StatfeedEvent",
+            json!({"MatchGuid": "G1", "EventName": "Save", "Type": "Save",
+                   "MainTarget": {"Name": "Me", "Shortcut": 1, "TeamNum": 0}}),
+        )
+    };
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("RoundStarted", guid()),
+        tick(20, 1000.0),
+        save(),
+        tick(40, 1400.0),
+        save(),
+    ]);
+    assert_eq!(m.stat_events.len(), 2);
+    assert_eq!(m.stat_events[0].boost, Some(20));
+    let stat = m.event_stats.iter().find(|e| e.event == "Save").unwrap();
+    assert_eq!(stat.slot, m.my_slot);
+    assert_eq!(stat.count, 2);
+    assert!((stat.avg_boost.unwrap() - 30.0).abs() < 1e-9);
+    assert!((stat.avg_speed.unwrap() - 1200.0).abs() < 1e-9);
+}
+
+#[test]
+fn goal_rows_carry_the_scorers_boost() {
+    let m = finish({
+        let mut events = two_v_two(11);
+        events.push(event(
+            "GoalScored",
+            json!({"MatchGuid": "G1", "GoalSpeed": 80.0, "GoalTime": 10.0,
+                   "ImpactLocation": {"X": 0.0, "Y": 5000.0, "Z": 100.0},
+                   "Scorer": {"Name": "Me", "Shortcut": 1, "TeamNum": 0},
+                   "BallLastTouch": {"Player": {"Name": "Me", "Shortcut": 1, "TeamNum": 0}, "Speed": 90.0}}),
+        ));
+        events
+    });
+    assert_eq!(m.goals.len(), 1);
+    assert_eq!(m.goals[0].scorer_boost, Some(0)); // the last live tick had boost 0
+}
+
+#[test]
+fn crossbar_and_pickups_are_counted_not_listed() {
+    let bar = |impact: f64| {
+        event(
+            "CrossbarHit",
+            json!({"MatchGuid": "G1", "BallLocation": {"X": 0.0, "Y": 5000.0, "Z": 320.0},
+                   "BallSpeed": 800.0, "ImpactForce": impact,
+                   "BallLastTouch": {"Player": {"Name": "Me", "Shortcut": 1, "TeamNum": 0}, "Speed": 100.0}}),
+        )
+    };
+    let pickup = |kind: &str, amount: f64, replay: bool| {
+        event(
+            "BoostPickup",
+            json!({"MatchGuid": "G1", "Player": {"Name": "Me", "Shortcut": 1, "TeamNum": 0},
+                   "Location": {"X": 0.0, "Y": 0.0, "Z": 70.0}, "BoostAmount": amount,
+                   "BoostType": kind, "bReplay": replay}),
+        )
+    };
+    let mut events = two_v_two(11);
+    events.extend([
+        bar(100.0),
+        bar(300.0),
+        pickup("BoostType_Pad", 12.0, false),
+        pickup("BoostType_Pill", 100.0, false),
+        pickup("BoostType_Pad", 12.0, true), // replay: ignored
+    ]);
+    let m = finish(events);
+    assert_eq!((m.crossbar[0].count, m.crossbar[0].max_impact), (2, 300.0));
+    let p = &m.pickups[0];
+    assert_eq!((p.pads, p.pills, p.amount), (1, 1, 112.0));
+}
+
+#[test]
+fn both_of_us_empty_is_measured_as_overlap() {
+    let tick = |me: i64, mate: i64| {
+        state(
+            11,
+            100,
+            pair(
+                player(1, "Me", 0, 0, Some(me)),
+                player(2, "Mate", 0, 0, Some(mate)),
+            ),
+            "Me",
+            [0, 0],
+        )
+    };
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("RoundStarted", guid()),
+        tick(0, 0),  // both empty
+        tick(0, 80), // only me
+        tick(70, 0), // only mate
+        tick(60, 60),
+    ]);
+    assert!((m.team_empty_overlap.unwrap() - 25.0).abs() < 1e-9);
 }

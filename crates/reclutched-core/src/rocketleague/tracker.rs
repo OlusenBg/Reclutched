@@ -4,7 +4,7 @@
 //! easy to test by feeding it saved events. Raw `UpdateState` snapshots are never kept; we only
 //! remember the last stats per player and a few running totals.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::events::{PlayerRef, StatsEvent, UpdateState};
 use super::playlist::is_real_match;
@@ -68,6 +68,9 @@ pub struct GoalRow {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    /// The scorer's boost and car speed just before the goal (when the game sends them).
+    pub scorer_boost: Option<i64>,
+    pub scorer_speed: Option<f64>,
     /// Team 0 and team 1 goals right after this one (filled by the next state update).
     pub score_after: Option<[i64; 2]>,
 }
@@ -78,55 +81,77 @@ pub struct StatEventRow {
     pub name: String,
     pub main: usize,
     pub secondary: Option<usize>,
+    /// The main player's boost and car speed when it happened (when the game sends them).
+    pub boost: Option<i64>,
+    pub speed: Option<f64>,
+}
+
+/// One kind of stat event for one player, as counts and averages (see [`StatEventRow`] for
+/// the individual events).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventStat {
+    pub slot: usize,
+    pub event: String,
+    pub count: i64,
+    pub avg_boost: Option<f64>,
+    pub avg_speed: Option<f64>,
+}
+
+/// Ball touches of one player. The field is split in thirds from the player's own point of view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TouchSummary {
+    pub slot: usize,
+    pub touches: i64,
+    pub def_third: i64,
+    pub mid_third: i64,
+    pub att_third: i64,
+    pub avg_post_speed: f64,
+    pub max_post_speed: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct BallHitRow {
-    pub clock: Clock,
-    pub player: usize,
-    pub pre_speed: f64,
-    pub post_speed: f64,
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+pub struct CrossbarSummary {
+    pub slot: usize,
+    pub count: i64,
+    pub max_impact: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CrossbarRow {
-    pub clock: Clock,
-    pub player: usize,
-    pub ball_speed: f64,
-    pub impact_force: f64,
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct BoostPickupRow {
-    pub clock: Clock,
-    pub player: usize,
-    /// "BoostType_Pad" (small) or "BoostType_Pill" (big).
-    pub kind: String,
+pub struct PickupSummary {
+    pub slot: usize,
+    pub pads: i64,
+    pub pills: i64,
     pub amount: f64,
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
 }
 
-/// Boost and speed habits of one player over the whole match. Only players the game gives
-/// boost data for (you and your teammates) have one.
+/// Boost and speed habits of one player over the live part of the match. Only players the game
+/// gives boost data for (you and your teammates) have one. Percentages are 0..=100 and do not
+/// depend on how often the game sends updates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MovementSummary {
     pub slot: usize,
+    /// Live ticks with a working car.
     pub samples: i64,
     pub avg_boost: f64,
-    /// Percentages of samples, 0..=100.
+    /// Share of time with no boost, a little (1-33), some (34-66) and a lot (67-100).
     pub pct_boost_empty: f64,
+    pub pct_boost_low: f64,
+    pub pct_boost_mid: f64,
+    pub pct_boost_high: f64,
     pub pct_boosting: f64,
+    /// Total boost spent and picked up (in boost units, 0-100 per tank).
+    pub boost_used: i64,
+    pub boost_gained: i64,
+    pub avg_speed: f64,
+    pub max_speed: f64,
     pub pct_supersonic: f64,
+    pub pct_powersliding: f64,
     pub pct_on_ground: f64,
     pub pct_on_wall: f64,
+    pub pct_airborne: f64,
+    /// Share of live time spent demolished, and how many times it happened.
+    pub pct_demolished: f64,
+    pub times_demolished: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,12 +169,19 @@ pub struct FinishedMatch {
     pub result: MatchResult,
     /// Where the clock stood when an abandoned match was lost.
     pub abandoned_clock: Option<Clock>,
+    /// Share of the time your team last touched the ball (time nobody touched it is ignored).
+    pub my_possession_pct: Option<f64>,
+    pub ball_avg_speed: Option<f64>,
+    pub ball_max_speed: Option<f64>,
+    /// Share of your live time when you AND a teammate both had no boost.
+    pub team_empty_overlap: Option<f64>,
     pub players: Vec<PlayerSummary>,
     pub goals: Vec<GoalRow>,
     pub stat_events: Vec<StatEventRow>,
-    pub ball_hits: Vec<BallHitRow>,
-    pub crossbar_hits: Vec<CrossbarRow>,
-    pub boost_pickups: Vec<BoostPickupRow>,
+    pub event_stats: Vec<EventStat>,
+    pub touches: Vec<TouchSummary>,
+    pub crossbar: Vec<CrossbarSummary>,
+    pub pickups: Vec<PickupSummary>,
     pub movement: Vec<MovementSummary>,
 }
 
@@ -229,13 +261,52 @@ fn now_unix() -> i64 {
 /// Running boost/speed totals for one player.
 #[derive(Default)]
 struct MoveAcc {
-    samples: i64,
+    /// Live ticks where the game sent boost data for this player.
+    ticks: i64,
+    /// Of those, ticks with a working car.
+    alive: i64,
     boost_sum: i64,
-    empty: i64,
+    /// Ticks with boost 0, 1-33, 34-66, 67-100.
+    bands: [i64; 4],
     boosting: i64,
+    speed_sum: f64,
+    speed_max: f64,
     supersonic: i64,
+    powersliding: i64,
     on_ground: i64,
     on_wall: i64,
+    airborne: i64,
+    boost_used: i64,
+    boost_gained: i64,
+    /// Boost on the previous live tick; `None` after a gap (countdown, replay, demolished) so
+    /// the jump back to the starting 33 boost isn't counted as a pickup.
+    last_boost: Option<i64>,
+    was_dead: bool,
+    times_demolished: i64,
+}
+
+#[derive(Default)]
+struct TouchAcc {
+    touches: i64,
+    thirds: [i64; 3],
+    speed_sum: f64,
+    speed_max: f64,
+}
+
+#[derive(Default)]
+struct EventAcc {
+    count: i64,
+    boost_sum: i64,
+    boost_n: i64,
+    speed_sum: f64,
+    speed_n: i64,
+}
+
+#[derive(Default)]
+struct PickupAcc {
+    pads: i64,
+    pills: i64,
+    amount: f64,
 }
 
 struct PlayerAcc {
@@ -247,6 +318,9 @@ struct PlayerAcc {
     stats: [i64; 8],
     joined: Option<Clock>,
     left: Option<Clock>,
+    /// Latest boost and speed outside replays, used as context for goals and stat events.
+    last_boost: Option<i64>,
+    last_speed: Option<f64>,
     movement: MoveAcc,
 }
 
@@ -265,6 +339,12 @@ struct Active {
     replay_events: bool,
     /// The game's own "a replay is showing" flag from the latest state update.
     replay_state: bool,
+    /// True while the ball is actually in play (after RoundStarted until a goal or the end).
+    /// Countdowns and replays are left out of every average.
+    live: bool,
+    /// Once we have seen a countdown/round/goal we trust those events; before that (we joined
+    /// the match half way) we assume play is live as soon as the clock moves.
+    phase_known: bool,
     /// We loaded a replay from the match history, or are watching someone else.
     dropped: bool,
     winner: Option<i64>,
@@ -275,9 +355,18 @@ struct Active {
     goals: Vec<GoalRow>,
     awaiting_score: Option<usize>,
     stat_events: Vec<StatEventRow>,
-    ball_hits: Vec<BallHitRow>,
-    crossbar_hits: Vec<CrossbarRow>,
-    boost_pickups: Vec<BoostPickupRow>,
+    event_acc: BTreeMap<(usize, String), EventAcc>,
+    touches: BTreeMap<usize, TouchAcc>,
+    crossbar: BTreeMap<usize, (i64, f64)>,
+    pickups: BTreeMap<usize, PickupAcc>,
+    /// Live ticks in which team 0 / team 1 touched the ball last.
+    possession_ticks: [i64; 2],
+    ball_ticks: i64,
+    ball_speed_sum: f64,
+    ball_speed_max: f64,
+    my_ticks: i64,
+    overlap_ticks: i64,
+    teammate_seen: bool,
 }
 
 impl Active {
@@ -293,6 +382,8 @@ impl Active {
             overtime_seen: false,
             replay_events: false,
             replay_state: false,
+            live: false,
+            phase_known: false,
             dropped: false,
             winner: None,
             team_goals: [0, 0],
@@ -302,9 +393,17 @@ impl Active {
             goals: Vec::new(),
             awaiting_score: None,
             stat_events: Vec::new(),
-            ball_hits: Vec::new(),
-            crossbar_hits: Vec::new(),
-            boost_pickups: Vec::new(),
+            event_acc: BTreeMap::new(),
+            touches: BTreeMap::new(),
+            crossbar: BTreeMap::new(),
+            pickups: BTreeMap::new(),
+            possession_ticks: [0, 0],
+            ball_ticks: 0,
+            ball_speed_sum: 0.0,
+            ball_speed_max: 0.0,
+            my_ticks: 0,
+            overlap_ticks: 0,
+            teammate_seen: false,
         }
     }
 
@@ -318,9 +417,23 @@ impl Active {
         self.replay_events || self.replay_state
     }
 
+    /// Forget the previous boost of every player. Called whenever play starts or stops, so the
+    /// jump to the kickoff boost (or back from a demolition) is never counted as a pickup.
+    fn reset_boost_history(&mut self) {
+        for p in &mut self.players {
+            p.movement.last_boost = None;
+            p.movement.was_dead = false;
+        }
+    }
+
     /// Whether to collect rows right now: a real match, not a replay, not dropped.
     fn collecting(&self) -> bool {
         !self.dropped && !self.in_replay() && self.playlist_id.is_none_or(is_real_match)
+    }
+
+    /// Whether to add to the per-tick averages: collecting, and the ball is in play.
+    fn sampling(&self) -> bool {
+        self.collecting() && self.live
     }
 
     fn set_clock(&mut self, remaining: i64, overtime: bool) {
@@ -331,7 +444,12 @@ impl Active {
         self.overtime_seen |= overtime;
         match self.first_remaining {
             None => self.first_remaining = Some(remaining),
-            Some(first) if first != remaining => self.play_seen = true,
+            Some(first) if first != remaining => {
+                self.play_seen = true;
+                if !self.phase_known && !self.in_replay() {
+                    self.live = true;
+                }
+            }
             Some(_) => {}
         }
     }
@@ -354,6 +472,8 @@ impl Active {
             stats: [0; 8],
             joined,
             left: None,
+            last_boost: None,
+            last_speed: None,
             movement: MoveAcc::default(),
         });
         self.players.len() - 1
@@ -388,9 +508,10 @@ impl Active {
             self.goals[idx].score_after = Some(self.team_goals);
         }
 
-        let collect_movement = settings.movement && self.collecting();
+        let mut slots = Vec::with_capacity(u.players.len());
         for p in &u.players {
             let slot = self.slot(p.shortcut, &p.name, p.team_num);
+            slots.push(slot);
             let acc = &mut self.players[slot];
             acc.primary_id = Some(p.primary_id.clone());
             acc.team = p.team_num;
@@ -404,18 +525,10 @@ impl Active {
                 p.car_touches,
                 p.demos,
             ];
-            // Boost data is only sent for you and your teammates. Skip dead cars and replays.
-            if let (true, Some(boost)) = (collect_movement, p.boost) {
-                if p.has_car != Some(false) && p.demolished != Some(true) {
-                    let m = &mut acc.movement;
-                    m.samples += 1;
-                    m.boost_sum += boost;
-                    m.empty += i64::from(boost == 0);
-                    m.boosting += i64::from(p.boosting == Some(true));
-                    m.supersonic += i64::from(p.supersonic == Some(true));
-                    m.on_ground += i64::from(p.on_ground == Some(true));
-                    m.on_wall += i64::from(p.on_wall == Some(true));
-                }
+            // Replays show other cars' values, so only remember live ones as "context".
+            if !game.replay {
+                acc.last_boost = p.boost;
+                acc.last_speed = p.speed;
             }
         }
 
@@ -433,7 +546,93 @@ impl Active {
                 }
             }
         }
+
+        if self.sampling() {
+            if settings.movement {
+                self.sample_movement(u, &slots);
+            }
+            if settings.possession {
+                self.sample_ball(game.ball.team_num, game.ball.speed);
+            }
+        } else {
+            self.reset_boost_history();
+        }
         learned
+    }
+
+    /// Adds one live tick to every player the game sends boost data for.
+    fn sample_movement(&mut self, u: &UpdateState, slots: &[usize]) {
+        let my = self.my_slot;
+        let my_team = my.map(|s| self.players[s].team);
+        let (mut me_empty, mut me_alive, mut mate_empty) = (false, false, false);
+
+        for (p, &slot) in u.players.iter().zip(slots) {
+            let Some(boost) = p.boost else { continue };
+            let dead = p.has_car == Some(false) || p.demolished == Some(true);
+            let m = &mut self.players[slot].movement;
+            m.ticks += 1;
+            if dead {
+                if !m.was_dead {
+                    m.times_demolished += 1;
+                }
+                m.was_dead = true;
+                m.last_boost = None;
+                continue;
+            }
+            m.was_dead = false;
+            m.alive += 1;
+            m.boost_sum += boost;
+            let band = match boost {
+                0 => 0,
+                1..=33 => 1,
+                34..=66 => 2,
+                _ => 3,
+            };
+            m.bands[band] += 1;
+            m.boosting += i64::from(p.boosting == Some(true));
+            if let Some(speed) = p.speed {
+                m.speed_sum += speed;
+                m.speed_max = m.speed_max.max(speed);
+            }
+            m.supersonic += i64::from(p.supersonic == Some(true));
+            m.powersliding += i64::from(p.powersliding == Some(true));
+            m.on_ground += i64::from(p.on_ground == Some(true));
+            m.on_wall += i64::from(p.on_wall == Some(true));
+            m.airborne += i64::from(p.on_ground == Some(false) && p.on_wall != Some(true));
+            if let Some(prev) = m.last_boost {
+                if boost > prev {
+                    m.boost_gained += boost - prev;
+                } else {
+                    m.boost_used += prev - boost;
+                }
+            }
+            m.last_boost = Some(boost);
+
+            if Some(slot) == my {
+                me_alive = true;
+                me_empty = boost == 0;
+            } else if Some(p.team_num) == my_team {
+                self.teammate_seen = true;
+                mate_empty |= boost == 0;
+            }
+        }
+        if me_alive {
+            self.my_ticks += 1;
+            self.overlap_ticks += i64::from(me_empty && mate_empty);
+        }
+    }
+
+    fn sample_ball(&mut self, last_touch_team: i64, speed: f64) {
+        self.ball_ticks += 1;
+        self.ball_speed_sum += speed;
+        self.ball_speed_max = self.ball_speed_max.max(speed);
+        // 255 means nobody has touched the ball yet.
+        if let Some(t) = usize::try_from(last_touch_team)
+            .ok()
+            .and_then(|t| self.possession_ticks.get_mut(t))
+        {
+            *t += 1;
+        }
     }
 
     fn on_other(&mut self, event: &StatsEvent, settings: &Settings) {
@@ -445,15 +644,31 @@ impl Active {
             StatsEvent::RoundStarted(_) => {
                 self.play_seen = true;
                 self.replay_events = false;
+                self.live = true;
+                self.phase_known = true;
+                self.reset_boost_history();
             }
-            StatsEvent::CountdownBegin(_) => self.replay_events = false,
-            StatsEvent::GoalReplayStart(_) => self.replay_events = true,
+            StatsEvent::CountdownBegin(_) => {
+                self.replay_events = false;
+                self.live = false;
+                self.phase_known = true;
+                self.reset_boost_history();
+            }
+            StatsEvent::GoalReplayStart(_) => {
+                self.replay_events = true;
+                self.live = false;
+                self.phase_known = true;
+                self.reset_boost_history();
+            }
             StatsEvent::GoalReplayEnd(_) => self.replay_events = false,
             StatsEvent::ReplayCreated(_) => self.dropped = true,
             StatsEvent::MatchEnded(m) => {
                 self.note_guid(m.match_guid.as_deref());
                 self.winner = Some(m.winner_team_num);
                 self.play_seen = true;
+                self.live = false;
+                self.phase_known = true;
+                self.reset_boost_history();
             }
             StatsEvent::PlayerJoined(p) => match self.slot_by_name(&p.player_name) {
                 Some(i) => {
@@ -472,6 +687,9 @@ impl Active {
             }
             StatsEvent::GoalScored(g) if self.collecting() && !g.scorer.name.is_empty() => {
                 self.play_seen = true;
+                self.live = false;
+                self.phase_known = true;
+                self.reset_boost_history();
                 if settings.goals {
                     let scorer = self.slot_of(&g.scorer);
                     let assister = g.assister.as_ref().map(|a| self.slot_of(a));
@@ -484,6 +702,8 @@ impl Active {
                         x: g.impact_location.x,
                         y: g.impact_location.y,
                         z: g.impact_location.z,
+                        scorer_boost: self.players[scorer].last_boost,
+                        scorer_speed: self.players[scorer].last_speed,
                         score_after: None,
                     });
                     self.awaiting_score = Some(self.goals.len() - 1);
@@ -492,52 +712,69 @@ impl Active {
             StatsEvent::StatfeedEvent(s) if self.collecting() && settings.stat_events => {
                 let main = self.slot_of(&s.main_target);
                 let secondary = s.secondary_target.as_ref().map(|t| self.slot_of(t));
+                let (boost, speed) = (self.players[main].last_boost, self.players[main].last_speed);
                 self.stat_events.push(StatEventRow {
                     clock: self.clock,
                     name: s.event_name.clone(),
                     main,
                     secondary,
+                    boost,
+                    speed,
                 });
+                let acc = self
+                    .event_acc
+                    .entry((main, s.event_name.clone()))
+                    .or_default();
+                acc.count += 1;
+                if let Some(b) = boost {
+                    acc.boost_sum += b;
+                    acc.boost_n += 1;
+                }
+                if let Some(v) = speed {
+                    acc.speed_sum += v;
+                    acc.speed_n += 1;
+                }
             }
             StatsEvent::BallHit(b) if self.collecting() && settings.ball_hits => {
                 for hitter in &b.players {
-                    let player = self.slot_of(hitter);
-                    self.ball_hits.push(BallHitRow {
-                        clock: self.clock,
-                        player,
-                        pre_speed: b.ball.pre_hit_speed,
-                        post_speed: b.ball.post_hit_speed,
-                        x: b.ball.location.x,
-                        y: b.ball.location.y,
-                        z: b.ball.location.z,
-                    });
+                    let slot = self.slot_of(hitter);
+                    // Team 0 attacks toward +Y and team 1 toward -Y (checked against real goals).
+                    let toward_enemy = if hitter.team_num == 0 {
+                        b.ball.location.y
+                    } else {
+                        -b.ball.location.y
+                    };
+                    let third = if toward_enemy < -THIRD {
+                        0
+                    } else if toward_enemy > THIRD {
+                        2
+                    } else {
+                        1
+                    };
+                    let acc = self.touches.entry(slot).or_default();
+                    acc.touches += 1;
+                    acc.thirds[third] += 1;
+                    acc.speed_sum += b.ball.post_hit_speed;
+                    acc.speed_max = acc.speed_max.max(b.ball.post_hit_speed);
                 }
             }
             StatsEvent::CrossbarHit(c) if self.collecting() && settings.crossbar_hits => {
-                let player = self.slot_of(&c.ball_last_touch.player);
-                self.crossbar_hits.push(CrossbarRow {
-                    clock: self.clock,
-                    player,
-                    ball_speed: c.ball_speed,
-                    impact_force: c.impact_force,
-                    x: c.ball_location.x,
-                    y: c.ball_location.y,
-                    z: c.ball_location.z,
-                });
+                let slot = self.slot_of(&c.ball_last_touch.player);
+                let acc = self.crossbar.entry(slot).or_insert((0, 0.0));
+                acc.0 += 1;
+                acc.1 = acc.1.max(c.impact_force);
             }
             StatsEvent::BoostPickup(b)
                 if self.collecting() && !b.replay && settings.boost_pickups =>
             {
-                let player = self.slot_of(&b.player);
-                self.boost_pickups.push(BoostPickupRow {
-                    clock: self.clock,
-                    player,
-                    kind: b.boost_type.clone(),
-                    amount: b.boost_amount,
-                    x: b.location.x,
-                    y: b.location.y,
-                    z: b.location.z,
-                });
+                let slot = self.slot_of(&b.player);
+                let acc = self.pickups.entry(slot).or_default();
+                if b.boost_type == "BoostType_Pill" {
+                    acc.pills += 1;
+                } else {
+                    acc.pads += 1;
+                }
+                acc.amount += b.boost_amount;
             }
             _ => {}
         }
@@ -578,6 +815,60 @@ impl Active {
             Vec::new()
         };
 
+        let touched = self.possession_ticks[0] + self.possession_ticks[1];
+        let my_possession_pct = usize::try_from(my_team)
+            .ok()
+            .and_then(|t| self.possession_ticks.get(t))
+            .filter(|_| touched > 0)
+            .map(|&mine| mine as f64 * 100.0 / touched as f64);
+        let has_ball = settings.possession && self.ball_ticks > 0;
+        let team_empty_overlap = (settings.movement && self.teammate_seen && self.my_ticks > 0)
+            .then(|| self.overlap_ticks as f64 * 100.0 / self.my_ticks as f64);
+
+        let event_stats = self
+            .event_acc
+            .iter()
+            .map(|((slot, event), a)| EventStat {
+                slot: *slot,
+                event: event.clone(),
+                count: a.count,
+                avg_boost: (a.boost_n > 0).then(|| a.boost_sum as f64 / a.boost_n as f64),
+                avg_speed: (a.speed_n > 0).then(|| a.speed_sum / a.speed_n as f64),
+            })
+            .collect();
+        let touches = self
+            .touches
+            .iter()
+            .map(|(slot, a)| TouchSummary {
+                slot: *slot,
+                touches: a.touches,
+                def_third: a.thirds[0],
+                mid_third: a.thirds[1],
+                att_third: a.thirds[2],
+                avg_post_speed: a.speed_sum / a.touches as f64,
+                max_post_speed: a.speed_max,
+            })
+            .collect();
+        let crossbar = self
+            .crossbar
+            .iter()
+            .map(|(slot, &(count, max_impact))| CrossbarSummary {
+                slot: *slot,
+                count,
+                max_impact,
+            })
+            .collect();
+        let pickups = self
+            .pickups
+            .iter()
+            .map(|(slot, a)| PickupSummary {
+                slot: *slot,
+                pads: a.pads,
+                pills: a.pills,
+                amount: a.amount,
+            })
+            .collect();
+
         Some(FinishedMatch {
             guid: self.guid,
             playlist_id,
@@ -590,16 +881,24 @@ impl Active {
             overtime: self.overtime_seen,
             result,
             abandoned_clock,
+            my_possession_pct: my_possession_pct.filter(|_| settings.possession),
+            ball_avg_speed: has_ball.then(|| self.ball_speed_sum / self.ball_ticks as f64),
+            ball_max_speed: has_ball.then_some(self.ball_speed_max),
+            team_empty_overlap,
             players,
             goals: self.goals,
             stat_events: self.stat_events,
-            ball_hits: self.ball_hits,
-            crossbar_hits: self.crossbar_hits,
-            boost_pickups: self.boost_pickups,
+            event_stats,
+            touches,
+            crossbar,
+            pickups,
             movement,
         })
     }
 }
+
+/// A third of the field length (the field runs from about -5120 to +5120).
+const THIRD: f64 = 1707.0;
 
 /// With the roster switch off we keep only slot, team and "is me": enough for other rows to
 /// refer to, but no names, ids, stats or join/leave times.
@@ -630,19 +929,30 @@ fn player_summary(slot: usize, p: &PlayerAcc, is_me: bool, roster: bool) -> Play
 }
 
 fn movement_summary(slot: usize, m: &MoveAcc) -> Option<MovementSummary> {
-    if m.samples == 0 {
+    if m.alive == 0 {
         return None;
     }
-    let n = m.samples as f64;
+    let n = m.alive as f64;
     let pct = |count: i64| count as f64 * 100.0 / n;
     Some(MovementSummary {
         slot,
-        samples: m.samples,
+        samples: m.alive,
         avg_boost: m.boost_sum as f64 / n,
-        pct_boost_empty: pct(m.empty),
+        pct_boost_empty: pct(m.bands[0]),
+        pct_boost_low: pct(m.bands[1]),
+        pct_boost_mid: pct(m.bands[2]),
+        pct_boost_high: pct(m.bands[3]),
         pct_boosting: pct(m.boosting),
+        boost_used: m.boost_used,
+        boost_gained: m.boost_gained,
+        avg_speed: m.speed_sum / n,
+        max_speed: m.speed_max,
         pct_supersonic: pct(m.supersonic),
+        pct_powersliding: pct(m.powersliding),
         pct_on_ground: pct(m.on_ground),
         pct_on_wall: pct(m.on_wall),
+        pct_airborne: pct(m.airborne),
+        pct_demolished: (m.ticks - m.alive) as f64 * 100.0 / m.ticks as f64,
+        times_demolished: m.times_demolished,
     })
 }
