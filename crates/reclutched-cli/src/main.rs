@@ -3,7 +3,7 @@ use reclutched_core::rocketleague::settings::{Settings, TOGGLES};
 
 /// Linux-native game stats tracker.
 #[derive(Parser)]
-#[command(version, about)]
+#[command(name = "reclutched", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

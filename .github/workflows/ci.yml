@@ -1,0 +1,72 @@
+name: CI
+
+# Runs on every push to dev and test.
+on:
+  push:
+    branches: [dev, test]
+
+# A newer push to the same branch cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt, clippy, test
+    uses: ./.github/workflows/checks.yml
+
+  # Only on the test branch: build the release binary and publish it as a DRAFT release.
+  # This repository is public, so build artifacts would be downloadable by any GitHub user;
+  # a draft release is only visible to people with write access (you).
+  build:
+    name: build test release (draft)
+    if: github.ref == 'refs/heads/test'
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable) and the musl target
+        run: |
+          rustup toolchain install stable --profile minimal --target x86_64-unknown-linux-musl
+          rustup default stable
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-musl-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-musl-
+
+      - name: Build and package
+        run: .github/scripts/package.sh "test-${GITHUB_SHA::7}"
+
+      - name: Publish as a draft pre-release (replaces older test drafts)
+        run: |
+          short="${GITHUB_SHA::7}"
+          # Remember the older test drafts, create the new one, then delete the old ones.
+          old_ids=$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.draft and (.name | startswith("Test build "))) | .id')
+          gh release create "test-${short}" dist/* \
+            --draft --prerelease \
+            --target "${GITHUB_SHA}" \
+            --title "Test build ${short}" \
+            --notes "Build of the test branch at ${GITHUB_SHA}. Draft: only visible to people with write access."
+          for id in $old_ids; do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/${id}"
+          done

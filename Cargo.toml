@@ -7,6 +7,10 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+# Smaller release binary: drop debug symbols.
+[profile.release]
+strip = true
+
 [workspace.dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
