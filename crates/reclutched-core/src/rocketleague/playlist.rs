@@ -91,14 +91,9 @@ pub enum MapFileError {
     Json(#[from] serde_json::Error),
 }
 
-/// Where the user's own entries live: `$XDG_CONFIG_HOME/reclutched/playlist_map.json`
-/// (or `~/.config/...` when that variable isn't set).
+/// Where the user's own entries live: `<config dir>/playlist_map.json`.
 pub fn default_map_path() -> Option<PathBuf> {
-    let base = match std::env::var_os("XDG_CONFIG_HOME") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
-    };
-    Some(base.join("reclutched").join("playlist_map.json"))
+    Some(crate::config_dir()?.join("playlist_map.json"))
 }
 
 #[derive(Debug, Clone, Default)]

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use reclutched_core::rocketleague::settings::{Settings, TOGGLES};
 
 /// Linux-native game stats tracker.
 #[derive(Parser)]
@@ -9,7 +10,25 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum ConfigAction {
+    /// Show every switch and whether it is on.
+    List,
+    /// Turn a switch on.
+    Enable { name: String },
+    /// Turn a switch off.
+    Disable { name: String },
+}
+
+#[derive(Subcommand)]
 enum Command {
+    /// Choose what Reclutched collects and stores.
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+        /// Settings file (default: ~/.config/reclutched/settings.json).
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+    },
     /// Print raw Rocket League Stats API events to the terminal.
     Dump {
         /// Address of the Stats API websocket.
@@ -42,6 +61,12 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match Cli::parse().command {
+        Command::Config { action, file } => {
+            let path = file
+                .or_else(Settings::default_path)
+                .ok_or_else(|| anyhow::anyhow!("cannot find your home folder; pass --file"))?;
+            run_config(action, &path)
+        }
         Command::Dump { addr, parsed } => {
             // Run until Ctrl-C; `select!` returns as soon as either branch finishes.
             tokio::select! {
@@ -59,4 +84,31 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+fn run_config(action: ConfigAction, path: &std::path::Path) -> anyhow::Result<()> {
+    let mut settings = Settings::load(path)?;
+    let (name, value) = match action {
+        ConfigAction::List => {
+            for (name, description) in TOGGLES {
+                let state = if settings.get(name) == Some(true) {
+                    "on "
+                } else {
+                    "off"
+                };
+                println!("{name:<16} {state}  {description}");
+            }
+            println!("\nsettings file: {}", path.display());
+            return Ok(());
+        }
+        ConfigAction::Enable { name } => (name, true),
+        ConfigAction::Disable { name } => (name, false),
+    };
+    if !settings.set(&name, value) {
+        let known: Vec<&str> = TOGGLES.iter().map(|(n, _)| *n).collect();
+        anyhow::bail!("unknown switch '{name}'. Known: {}", known.join(", "));
+    }
+    settings.save(path)?;
+    println!("{name} is now {}", if value { "on" } else { "off" });
+    Ok(())
 }
