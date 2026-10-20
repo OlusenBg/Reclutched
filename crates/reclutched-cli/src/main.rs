@@ -19,12 +19,12 @@ enum Command {
         #[arg(long)]
         parsed: bool,
     },
-    /// Learn which playlist id is which game mode: play a match, then answer what it was.
+    /// Name playlist ids that aren't in the built-in table: play a match, then answer what it was.
     Map {
         /// Address of the Stats API websocket.
         #[arg(long, default_value = "127.0.0.1:49124")]
         addr: String,
-        /// Where to save the answers (default: ~/.config/reclutched/playlist_map.json).
+        /// Where to save your names (default: ~/.config/reclutched/playlist_map.json).
         #[arg(long)]
         file: Option<std::path::PathBuf>,
     },

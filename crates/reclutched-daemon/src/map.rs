@@ -1,4 +1,4 @@
-//! `reclutched map`: learn which `PlaylistId` is which game mode by asking the player.
+//! `reclutched map`: name playlist ids that aren't in the built-in table.
 //!
 //! The logic lives in [`Mapper`], which only turns events/typed lines into text to print,
 //! so it can be unit tested without a game or a terminal.
@@ -18,9 +18,11 @@ use crate::source;
 pub struct Step {
     /// Lines to print.
     pub lines: Vec<String>,
-    /// True when we should stop (everything mapped, or the user quit).
+    /// True when we should stop (the user quit).
     pub finished: bool,
 }
+
+const HELP: &str = "Type a name for it (e.g. Ranked Solo Standard), or 'skip' / 'list' / 'quit'.";
 
 pub struct Mapper {
     map: PlaylistMap,
@@ -28,8 +30,8 @@ pub struct Mapper {
     path: Option<PathBuf>,
     /// Playlist id and highest player count seen in the current match.
     current: Option<(i64, usize)>,
-    /// Ids we are asking about right now.
-    pending: Option<(i64, usize)>,
+    /// The id we are asking about right now.
+    pending: Option<i64>,
     /// Ids the user chose to skip, so we don't ask again this session.
     skipped: HashSet<i64>,
 }
@@ -47,17 +49,11 @@ impl Mapper {
 
     /// Text shown when starting.
     pub fn intro(&self) -> Step {
-        let left = self.map.remaining().len();
-        if left == 0 {
-            return Step {
-                lines: vec!["Done! Every game mode is already mapped.".into()],
-                finished: true,
-            };
-        }
         Step {
             lines: vec![
-                format!("{left} game modes left to map. Play a match; when it ends I'll ask what it was."),
-                "Commands any time: list, skip, quit.".into(),
+                "Play as normal. If a match uses a playlist id I don't know, I'll ask you to name it when it ends."
+                    .into(),
+                "Commands any time: list (your saved names), skip, quit.".into(),
             ],
             finished: false,
         }
@@ -87,49 +83,37 @@ impl Mapper {
         if self.pending.is_some() || self.map.name(id).is_some() || self.skipped.contains(&id) {
             return Step::default();
         }
-        self.pending = Some((id, players));
-        let mut lines = vec![
-            String::new(),
-            format!(
-                "Match finished (playlist id {id}, up to {players} players). What did you play?"
-            ),
-        ];
-        lines.extend(self.numbered_list());
-        lines.push("Type a number, or 'skip' / 'list' / 'quit'.".into());
+        self.pending = Some(id);
         Step {
-            lines,
+            lines: vec![
+                String::new(),
+                format!("Match finished with an unknown playlist id {id} (up to {players} players). What mode was it?"),
+                HELP.into(),
+            ],
             finished: false,
         }
     }
 
-    fn numbered_list(&self) -> Vec<String> {
-        self.map
-            .remaining()
-            .iter()
-            .enumerate()
-            .map(|(i, mode)| format!("  {}) {mode}", i + 1))
-            .collect()
-    }
-
     /// Handles one line the user typed.
     pub fn on_input(&mut self, line: &str) -> Step {
-        let line = line.trim().to_lowercase();
-        match line.as_str() {
+        let line = line.trim();
+        match line.to_lowercase().as_str() {
             "" => Step::default(),
             "quit" | "q" | "exit" => Step {
                 lines: vec!["Bye. Your answers are saved.".into()],
                 finished: true,
             },
             "list" => {
-                let mut lines = vec![format!("{} modes left to map:", self.map.remaining().len())];
-                lines.extend(self.numbered_list());
+                let entries = self.map.user_entries();
+                let mut lines = vec![format!("{} names saved by you:", entries.len())];
+                lines.extend(entries.iter().map(|(id, name)| format!("  {id}: {name}")));
                 Step {
                     lines,
                     finished: false,
                 }
             }
             "skip" => match self.pending.take() {
-                Some((id, _)) => {
+                Some(id) => {
                     self.skipped.insert(id);
                     Step {
                         lines: vec![format!("Skipped playlist id {id}.")],
@@ -141,48 +125,36 @@ impl Mapper {
                     finished: false,
                 },
             },
-            other => match other.parse::<usize>() {
-                Ok(n) => self.answer(n),
-                Err(_) => Step {
-                    lines: vec!["Type a number, or 'skip' / 'list' / 'quit'.".into()],
-                    finished: false,
-                },
-            },
+            _ => self.answer(line),
         }
     }
 
-    fn answer(&mut self, n: usize) -> Step {
-        let Some((id, _)) = self.pending else {
+    /// Anything that isn't a command is taken as the mode name for the open question.
+    fn answer(&mut self, name: &str) -> Step {
+        let Some(id) = self.pending else {
             return Step {
                 lines: vec!["No question open. Finish a match first, or type 'list'.".into()],
                 finished: false,
             };
         };
-        let remaining = self.map.remaining();
-        let Some(mode) = n.checked_sub(1).and_then(|i| remaining.get(i)) else {
+        if name.len() > 60 {
             return Step {
-                lines: vec![format!("Pick a number from 1 to {}.", remaining.len())],
+                lines: vec!["That name is too long (60 characters max).".into()],
                 finished: false,
             };
-        };
-        self.map.insert(id, mode);
+        }
+        self.map.insert(id, name);
         self.pending = None;
 
-        let mut lines = vec![format!("Saved: playlist id {id} = {mode}")];
+        let mut lines = vec![format!("Saved: playlist id {id} = {name}")];
         if let Some(path) = &self.path {
             if let Err(err) = self.map.save(path) {
                 lines.push(format!("WARNING: could not save {}: {err}", path.display()));
             }
         }
-        let left = self.map.remaining().len();
-        if left == 0 {
-            lines.push("Done!".into());
-        } else {
-            lines.push(format!("{left} left."));
-        }
         Step {
             lines,
-            finished: left == 0,
+            finished: false,
         }
     }
 }
@@ -193,17 +165,13 @@ fn print_step(step: &Step) {
     }
 }
 
-/// Runs the interactive mapper until everything is mapped or the user quits.
+/// Runs the interactive helper until the user quits.
 pub async fn run(addr: &str, path: PathBuf) -> Result<()> {
     let map = PlaylistMap::load(&path).with_context(|| format!("loading {}", path.display()))?;
     let mut mapper = Mapper::new(map, Some(path.clone()));
 
-    let first = mapper.intro();
-    print_step(&first);
-    if first.finished {
-        return Ok(());
-    }
-    println!("Saving answers to {}", path.display());
+    print_step(&mapper.intro());
+    println!("Saving names to {}", path.display());
 
     let mut events = source::spawn(addr);
     let mut input = BufReader::new(tokio::io::stdin()).lines();
@@ -303,67 +271,61 @@ mod tests {
     }
 
     #[test]
-    fn asks_after_match_end_and_saves_the_answer() {
+    fn known_ids_never_ask() {
         let mut m = mapper();
-        m.on_event(&state(3, 4));
-        m.on_event(&state(3, 6));
+        for id in [3, 8, 9] {
+            m.on_event(&state(id, 4));
+            assert_eq!(m.on_event(&ended()), Step::default());
+        }
+    }
+
+    #[test]
+    fn asks_about_unknown_id_and_saves_the_typed_name() {
+        let mut m = mapper();
+        m.on_event(&state(12, 1));
+        m.on_event(&state(12, 2));
         let ask = m.on_event(&ended());
         assert!(ask
             .lines
             .iter()
-            .any(|l| l.contains("playlist id 3, up to 6 players")));
+            .any(|l| l.contains("playlist id 12 (up to 2 players)")));
 
-        let reply = m.on_input("3"); // 3rd item = "Casual 3v3"
-        assert!(reply.lines[0].contains("playlist id 3 = Casual 3v3"));
-        assert_eq!(m.map.name(3), Some("Casual 3v3"));
-
-        // Known now: the same match ending again (MatchDestroyed) does not ask twice.
+        let reply = m.on_input("Ranked Solo Standard");
         assert_eq!(
-            m.on_event(&StatsEvent::MatchDestroyed(MatchRef { match_guid: None })),
-            Step::default()
+            reply.lines[0],
+            "Saved: playlist id 12 = Ranked Solo Standard"
         );
+        assert_eq!(m.map.name(12), Some("Ranked Solo Standard"));
+
+        // Known now: MatchDestroyed after MatchEnded does not ask twice.
+        let destroyed = StatsEvent::MatchDestroyed(MatchRef { match_guid: None });
+        assert_eq!(m.on_event(&destroyed), Step::default());
     }
 
     #[test]
     fn skip_means_dont_ask_again() {
         let mut m = mapper();
-        m.on_event(&state(8, 5));
+        m.on_event(&state(99, 5));
         m.on_event(&ended());
         m.on_input("skip");
-        m.on_event(&state(8, 5));
+        m.on_event(&state(99, 5));
         assert_eq!(m.on_event(&ended()), Step::default());
     }
 
     #[test]
-    fn list_quit_and_bad_input() {
+    fn list_quit_and_stray_text() {
         let mut m = mapper();
-        assert!(m.on_input("list").lines[0].contains("modes left"));
-        assert!(m.on_input("5").lines[0].contains("No question open"));
-        assert!(m.on_input("banana").lines[0].contains("Type a number"));
+        assert!(m.on_input("list").lines[0].contains("0 names saved"));
+        assert!(m.on_input("some text").lines[0].contains("No question open"));
         assert!(m.on_input("quit").finished);
     }
 
     #[test]
-    fn out_of_range_number_is_rejected_and_keeps_question_open() {
+    fn overlong_name_is_rejected_and_keeps_question_open() {
         let mut m = mapper();
-        m.on_event(&state(3, 4));
+        m.on_event(&state(12, 4));
         m.on_event(&ended());
-        assert!(m.on_input("999").lines[0].contains("Pick a number"));
-        assert!(m.on_input("0").lines[0].contains("Pick a number"));
+        assert!(m.on_input(&"x".repeat(61)).lines[0].contains("too long"));
         assert!(m.pending.is_some());
-    }
-
-    #[test]
-    fn finishes_with_done_when_everything_is_mapped() {
-        let mut m = mapper();
-        let total = m.map.remaining().len();
-        let mut last = Step::default();
-        for id in 0..total as i64 {
-            m.on_event(&state(100 + id, 2));
-            m.on_event(&ended());
-            last = m.on_input("1");
-        }
-        assert!(last.finished);
-        assert!(last.lines.iter().any(|l| l == "Done!"));
     }
 }
