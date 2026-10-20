@@ -83,8 +83,15 @@ pub struct UpdateState {
     pub game: Game,
 }
 
-/// A player's stats. The `Option` fields are SPECTATOR-only in the docs, so in practice
-/// they are only present for the player you are watching (yourself).
+/// A player's stats.
+///
+/// The `Option` fields are the docs' SPECTATOR/TEAM fields: the game sends them for you and
+/// your teammates only. Real captures show the game then OMITS values that are 0 or false:
+/// `Speed` and `bHasCar` are always there for those players, but `Boost` is missing at 0 boost
+/// and `bBoosting`, `bOnGround`, `bOnWall`, `bPowersliding`, `bSupersonic` are missing when false.
+/// So a player with `speed` set and no `boost` has 0 boost, while an opponent (no such fields at
+/// all) is simply not visible. Speeds are in km/h (the docs say Unreal units/s; the top car speed
+/// shows up as 82.8, which is 2300 uu/s in km/h).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Player {

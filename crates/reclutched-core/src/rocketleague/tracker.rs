@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use super::events::{PlayerRef, StatsEvent, UpdateState};
+use super::events::{Player, PlayerRef, StatsEvent, UpdateState};
 use super::playlist::is_real_match;
 use super::settings::Settings;
 
@@ -142,6 +142,7 @@ pub struct MovementSummary {
     /// Total boost spent and picked up (in boost units, 0-100 per tank).
     pub boost_used: i64,
     pub boost_gained: i64,
+    /// Car speed in km/h (what the game sends).
     pub avg_speed: f64,
     pub max_speed: f64,
     pub pct_supersonic: f64,
@@ -527,7 +528,7 @@ impl Active {
             ];
             // Replays show other cars' values, so only remember live ones as "context".
             if !game.replay {
-                acc.last_boost = p.boost;
+                acc.last_boost = boost_of(p);
                 acc.last_speed = p.speed;
             }
         }
@@ -567,8 +568,9 @@ impl Active {
         let (mut me_empty, mut me_alive, mut mate_empty) = (false, false, false);
 
         for (p, &slot) in u.players.iter().zip(slots) {
-            let Some(boost) = p.boost else { continue };
-            let dead = p.has_car == Some(false) || p.demolished == Some(true);
+            let Some(boost) = boost_of(p) else { continue };
+            let dead =
+                p.has_car == Some(false) || p.demolished == Some(true) || p.attacker.is_some();
             let m = &mut self.players[slot].movement;
             m.ticks += 1;
             if dead {
@@ -598,7 +600,8 @@ impl Active {
             m.powersliding += i64::from(p.powersliding == Some(true));
             m.on_ground += i64::from(p.on_ground == Some(true));
             m.on_wall += i64::from(p.on_wall == Some(true));
-            m.airborne += i64::from(p.on_ground == Some(false) && p.on_wall != Some(true));
+            // The game omits false flags, so "not on the ground and not on a wall" is the air.
+            m.airborne += i64::from(p.on_ground != Some(true) && p.on_wall != Some(true));
             if let Some(prev) = m.last_boost {
                 if boost > prev {
                     m.boost_gained += boost - prev;
@@ -895,6 +898,22 @@ impl Active {
             movement,
         })
     }
+}
+
+/// Whether the game sends movement data for this player (you and your teammates). Opponents
+/// have none of these fields. See the note on [`Player`] about omitted zero/false values.
+fn visible(p: &Player) -> bool {
+    p.speed.is_some()
+        || p.has_car.is_some()
+        || p.boost.is_some()
+        || p.boosting.is_some()
+        || p.on_ground.is_some()
+        || p.supersonic.is_some()
+}
+
+/// Boost 0-100 for visible players. A missing `Boost` means 0.
+fn boost_of(p: &Player) -> Option<i64> {
+    visible(p).then(|| p.boost.unwrap_or(0))
 }
 
 /// A third of the field length (the field runs from about -5120 to +5120).

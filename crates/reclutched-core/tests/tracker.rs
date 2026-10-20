@@ -33,6 +33,8 @@ fn event(name: &str, data: Value) -> StatsEvent {
     parse_message(&json!({ "Event": name, "Data": data }).to_string()).unwrap()
 }
 
+/// A player as the game sends them. `boost: Some(_)` means "we can see this player's movement"
+/// (you and teammates); like the real game, `Boost` is left out at 0 and `bBoosting` when false.
 fn player(shortcut: i64, name: &str, team: i64, score: i64, boost: Option<i64>) -> Value {
     let mut p = json!({
         "Name": name, "PrimaryId": format!("Epic|{name}|0"), "Shortcut": shortcut,
@@ -40,8 +42,12 @@ fn player(shortcut: i64, name: &str, team: i64, score: i64, boost: Option<i64>) 
         "Touches": 0, "CarTouches": 0, "Demos": 0
     });
     if let Some(b) = boost {
-        p["Boost"] = json!(b);
-        p["bBoosting"] = json!(b > 0);
+        p["bHasCar"] = json!(true);
+        p["Speed"] = json!(0.0);
+        if b > 0 {
+            p["Boost"] = json!(b);
+            p["bBoosting"] = json!(true);
+        }
     }
     p
 }
@@ -649,4 +655,32 @@ fn both_of_us_empty_is_measured_as_overlap() {
         tick(60, 60),
     ]);
     assert!((m.team_empty_overlap.unwrap() - 25.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_missing_boost_key_means_zero_boost_but_opponents_are_not_visible() {
+    // Real game behavior: "Boost" is omitted at 0. Opponents have no movement fields at all.
+    let mut me = player(1, "Me", 0, 0, Some(40));
+    let mut mate = player(2, "Mate", 0, 0, Some(40));
+    me.as_object_mut().unwrap().remove("Boost");
+    me.as_object_mut().unwrap().remove("bBoosting");
+    mate["Boost"] = json!(80);
+    let tick = state(11, 100, pair(me, mate), "Me", [0, 0]);
+    let m = finish(vec![
+        event("MatchCreated", guid()),
+        event("RoundStarted", guid()),
+        tick.clone(),
+        tick,
+    ]);
+    let me = me_movement(&m);
+    assert_eq!(me.samples, 2);
+    assert!((me.pct_boost_empty - 100.0).abs() < 1e-9);
+    assert!((me.avg_boost - 0.0).abs() < 1e-9);
+    assert_eq!(
+        m.movement.len(),
+        2,
+        "only you and your teammate; opponents have no data"
+    );
+    // Both of us at zero... except the mate has 80, so no overlap.
+    assert!((m.team_empty_overlap.unwrap() - 0.0).abs() < 1e-9);
 }

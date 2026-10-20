@@ -40,6 +40,12 @@ enum Command {
         /// Don't use colors (also off when the output is piped or NO_COLOR is set).
         #[arg(long)]
         no_color: bool,
+        /// Show every stored number of the newest match instead of the list.
+        #[arg(long)]
+        detail: bool,
+        /// Show every stored number of this match (see the # column).
+        #[arg(long = "match", value_name = "ID")]
+        match_id: Option<i64>,
     },
     /// Follow the game and save every finished match to the database.
     Track {
@@ -102,6 +108,8 @@ async fn main() -> anyhow::Result<()> {
             limit,
             db,
             no_color,
+            detail,
+            match_id,
         } => {
             let path = db
                 .or_else(reclutched_core::rocketleague::storage::default_db_path)
@@ -114,7 +122,11 @@ async fn main() -> anyhow::Result<()> {
             let color = !no_color
                 && std::io::stdout().is_terminal()
                 && std::env::var_os("NO_COLOR").is_none();
-            reclutched_daemon::history::run(&store, &names, limit, color)
+            if detail || match_id.is_some() {
+                reclutched_daemon::history::run_detail(&store, &names, match_id, color)
+            } else {
+                reclutched_daemon::history::run(&store, &names, limit, color)
+            }
         }
         Command::Track { addr, db, settings } => {
             let paths = reclutched_daemon::track::Paths {
