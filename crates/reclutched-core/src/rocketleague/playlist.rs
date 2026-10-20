@@ -83,6 +83,12 @@ pub const BUILTIN: &[(i64, &str)] = &[
     (88, "Jump Jam"),
 ];
 
+/// Ids that are never a real match: intermission, training, workshop, custom training and
+/// online free play. The tracker ignores these sessions.
+pub fn is_real_match(id: i64) -> bool {
+    !matches!(id, -2 | 9 | 19 | 20 | 21 | 73)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum MapFileError {
     #[error("cannot read or write the playlist map file: {0}")]
@@ -172,6 +178,16 @@ mod tests {
         assert_eq!(map.name(3), Some("Casual Standard"));
         assert_eq!(map.name(8), Some("Exhibition"));
         assert_eq!(map.name(9), Some("Training"));
+    }
+
+    #[test]
+    fn training_and_friends_are_not_real_matches() {
+        for id in [-2, 9, 19, 20, 21, 73] {
+            assert!(!is_real_match(id), "{id}");
+        }
+        for id in [3, 8, 11, 13, 54] {
+            assert!(is_real_match(id), "{id}");
+        }
     }
 
     #[test]
