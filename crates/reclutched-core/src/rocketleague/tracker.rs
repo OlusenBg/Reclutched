@@ -193,6 +193,8 @@ impl Tracker {
                 // We may connect in the middle of a match, so a state update can start tracking.
                 let active = self.active.get_or_insert_with(|| Active::new(now));
                 if let Some(id) = active.on_update_state(u, &self.settings) {
+                    // Remember it right away so later matches can tell when we are spectating.
+                    self.settings.my_primary_id = Some(id.clone());
                     self.learned_id = Some(id);
                 }
                 None

@@ -29,6 +29,18 @@ enum Command {
         #[arg(long)]
         file: Option<std::path::PathBuf>,
     },
+    /// Follow the game and save every finished match to the database.
+    Track {
+        /// Address of the Stats API websocket.
+        #[arg(long, default_value = "127.0.0.1:49124")]
+        addr: String,
+        /// Database file (default: ~/.local/share/reclutched/matches.db).
+        #[arg(long)]
+        db: Option<std::path::PathBuf>,
+        /// Settings file (default: ~/.config/reclutched/settings.json).
+        #[arg(long)]
+        settings: Option<std::path::PathBuf>,
+    },
     /// Print raw Rocket League Stats API events to the terminal.
     Dump {
         /// Address of the Stats API websocket.
@@ -73,6 +85,19 @@ async fn main() -> anyhow::Result<()> {
                 _ = reclutched_daemon::dump::run(&addr, parsed) => Ok(()),
                 _ = tokio::signal::ctrl_c() => Ok(()),
             }
+        }
+        Command::Track { addr, db, settings } => {
+            let paths = reclutched_daemon::track::Paths {
+                db: db
+                    .or_else(reclutched_core::rocketleague::storage::default_db_path)
+                    .ok_or_else(|| anyhow::anyhow!("cannot find your home folder; pass --db"))?,
+                settings: settings.or_else(Settings::default_path).ok_or_else(|| {
+                    anyhow::anyhow!("cannot find your home folder; pass --settings")
+                })?,
+                playlist_map: reclutched_core::rocketleague::playlist::default_map_path(),
+            };
+            // `track` handles Ctrl-C itself so it can save the match in progress first.
+            reclutched_daemon::track::run(&addr, paths).await
         }
         Command::Map { addr, file } => {
             let path = file
