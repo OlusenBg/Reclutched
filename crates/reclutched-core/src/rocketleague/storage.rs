@@ -434,6 +434,16 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// (wins, losses, abandoned).
+    pub fn result_counts(&self) -> Result<(i64, i64, i64), StoreError> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(SUM(result = 'win'), 0), COALESCE(SUM(result = 'loss'), 0),
+                    COALESCE(SUM(result = 'abandoned'), 0) FROM matches",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    }
+
     /// (all matches, abandoned matches).
     pub fn abandon_counts(&self) -> Result<(i64, i64), StoreError> {
         let counts = self

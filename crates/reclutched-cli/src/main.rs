@@ -29,6 +29,18 @@ enum Command {
         #[arg(long)]
         file: Option<std::path::PathBuf>,
     },
+    /// Show your saved matches (green = win, red = loss).
+    History {
+        /// How many matches to show.
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// Database file (default: ~/.local/share/reclutched/matches.db).
+        #[arg(long)]
+        db: Option<std::path::PathBuf>,
+        /// Don't use colors (also off when the output is piped or NO_COLOR is set).
+        #[arg(long)]
+        no_color: bool,
+    },
     /// Follow the game and save every finished match to the database.
     Track {
         /// Address of the Stats API websocket.
@@ -85,6 +97,24 @@ async fn main() -> anyhow::Result<()> {
                 _ = reclutched_daemon::dump::run(&addr, parsed) => Ok(()),
                 _ = tokio::signal::ctrl_c() => Ok(()),
             }
+        }
+        Command::History {
+            limit,
+            db,
+            no_color,
+        } => {
+            let path = db
+                .or_else(reclutched_core::rocketleague::storage::default_db_path)
+                .ok_or_else(|| anyhow::anyhow!("cannot find your home folder; pass --db"))?;
+            let store = reclutched_core::rocketleague::storage::Store::open(&path)?;
+            let names = reclutched_core::rocketleague::playlist::default_map_path()
+                .and_then(|p| reclutched_core::rocketleague::playlist::PlaylistMap::load(&p).ok())
+                .unwrap_or_else(reclutched_core::rocketleague::playlist::PlaylistMap::with_builtin);
+            use std::io::IsTerminal;
+            let color = !no_color
+                && std::io::stdout().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none();
+            reclutched_daemon::history::run(&store, &names, limit, color)
         }
         Command::Track { addr, db, settings } => {
             let paths = reclutched_daemon::track::Paths {
