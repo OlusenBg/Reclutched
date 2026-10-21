@@ -222,7 +222,6 @@ impl App {
 
     fn open_settings(self: &Rc<Self>) {
         let again = Rc::downgrade(self);
-        let failed = Rc::downgrade(self);
         settings_dialog::open(
             &self.window,
             self.settings_path.clone(),
@@ -230,11 +229,6 @@ impl App {
             move || {
                 if let Some(app) = again.upgrade() {
                     app.show_setup(None);
-                }
-            },
-            move |message| {
-                if let Some(app) = failed.upgrade() {
-                    app.toast(message);
                 }
             },
         );

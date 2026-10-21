@@ -1,11 +1,12 @@
 //! The settings page: a profile, the display mode and every tracking switch.
 //! Changes are saved as soon as you make them.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
 use reclutched_core::rocketleague::settings::{DisplayMode, Settings};
+use reclutched_core::rocketleague::statsapi;
 
 use crate::flow::{username_error, ADV_EVENTS, ADV_HABITS, ADV_MATCHES};
 use crate::setup::{switch_subtitle, switch_title};
@@ -24,18 +25,62 @@ fn update(path: &std::path::Path, change: impl FnOnce(&mut Settings)) -> Result<
     settings.save(path).map_err(|e| e.to_string())
 }
 
-/// Opens the dialog over `parent`. `on_setup` runs when "Run setup again" is pressed,
-/// `on_error` with a message when saving fails.
+/// Accepts the game's install folder, its `TAGame` folder or its `Config` folder and returns
+/// the `Config` folder, or `None` if this is not Rocket League.
+fn normalize_game_folder(chosen: &Path) -> Option<PathBuf> {
+    [
+        chosen.to_path_buf(),
+        chosen.join("Config"),
+        chosen.join("TAGame/Config"),
+    ]
+    .into_iter()
+    .find(|dir| statsapi::config_file_in(dir).is_some())
+}
+
+/// What to tell the user about the Stats API in this folder.
+fn statsapi_summary(config_dir: Option<&Path>) -> (String, bool) {
+    let Some(dir) = config_dir else {
+        return ("Game folder not found yet".to_string(), false);
+    };
+    let Some(file) = statsapi::config_file_in(dir) else {
+        return (
+            "No Stats API settings file in that folder".to_string(),
+            false,
+        );
+    };
+    match std::fs::read_to_string(&file).map(|t| statsapi::read(&t)) {
+        Ok(s) if s.is_on() => (
+            format!("On, {} updates per second", s.packet_send_rate),
+            false,
+        ),
+        Ok(_) => (
+            "Off. Matches cannot be tracked until it is on".to_string(),
+            true,
+        ),
+        Err(e) => (format!("Cannot read the settings file: {e}"), false),
+    }
+}
+
+/// Opens the dialog over `parent`. `on_setup` runs when "Run setup again" is pressed.
+/// Messages (saved, could not save, ...) appear inside the dialog itself, because the main
+/// window's own toasts would be hidden behind it.
 pub fn open(
     parent: &adw::ApplicationWindow,
     settings_path: PathBuf,
     db_path: PathBuf,
     on_setup: impl Fn() + 'static,
-    on_error: impl Fn(&str) + 'static,
 ) {
     let current = Settings::load(&settings_path).unwrap_or_default();
-    let on_error = Rc::new(on_error);
     let path = Rc::new(settings_path);
+    let dialog = adw::PreferencesDialog::builder()
+        .title("Settings")
+        .content_width(560)
+        .content_height(640)
+        .build();
+    let on_error: Rc<dyn Fn(&str)> = {
+        let dialog = dialog.clone();
+        Rc::new(move |message| dialog.add_toast(adw::Toast::new(message)))
+    };
 
     let page = adw::PreferencesPage::new();
 
@@ -87,6 +132,129 @@ pub fn open(
     }
     profile.add(&mode_row);
     page.add(&profile);
+
+    // --- Rocket League: where it is, and whether its Stats API is on ---
+    let game = adw::PreferencesGroup::builder()
+        .title("Rocket League")
+        .description("The game only shares your stats when its Stats API is on. Restart the game after changing it.")
+        .build();
+    let folder_row = adw::ActionRow::builder()
+        .title("Game folder")
+        .subtitle_selectable(true)
+        .build();
+    let api_row = adw::ActionRow::builder().title("Stats API").build();
+    let find_button = gtk::Button::builder()
+        .label("Find")
+        .valign(gtk::Align::Center)
+        .tooltip_text("Look for Rocket League in the usual places (Heroic, Steam, Lutris)")
+        .build();
+    let choose_button = gtk::Button::builder()
+        .label("Choose\u{2026}")
+        .valign(gtk::Align::Center)
+        .tooltip_text("Pick the game folder yourself")
+        .build();
+    let on_button = gtk::Button::builder()
+        .label("Turn on")
+        .css_classes(["suggested-action"])
+        .valign(gtk::Align::Center)
+        .build();
+    folder_row.add_suffix(&find_button);
+    folder_row.add_suffix(&choose_button);
+    api_row.add_suffix(&on_button);
+    game.add(&folder_row);
+    game.add(&api_row);
+    page.add(&game);
+
+    // Shows the saved folder and the Stats API state.
+    let refresh = {
+        let path = path.clone();
+        let folder_row = folder_row.clone();
+        let api_row = api_row.clone();
+        let on_button = on_button.clone();
+        Rc::new(move || {
+            let dir = Settings::load(&path).ok().and_then(|s| s.game_config_dir);
+            folder_row.set_subtitle(
+                &dir.as_deref()
+                    .map_or("Not found yet. Press Find or Choose.".to_string(), |d| {
+                        d.display().to_string()
+                    }),
+            );
+            let (text, can_turn_on) = statsapi_summary(dir.as_deref());
+            api_row.set_subtitle(&text);
+            on_button.set_visible(can_turn_on);
+        })
+    };
+    // The first time: look for the game by ourselves, so most people never need to press Find.
+    if current.game_config_dir.is_none() {
+        if let Some(found) = statsapi::find_game_config_dirs().into_iter().next() {
+            let _ = update(&path, |s| s.game_config_dir = Some(found));
+        }
+    }
+    refresh();
+    {
+        let path = path.clone();
+        let refresh = refresh.clone();
+        let on_error = on_error.clone();
+        find_button.connect_clicked(move |_| {
+            match statsapi::find_game_config_dirs().into_iter().next() {
+                Some(found) => {
+                    if let Err(e) = update(&path, |s| s.game_config_dir = Some(found)) {
+                        on_error(&format!("Could not save: {e}"));
+                    }
+                }
+                None => on_error("Rocket League was not found. Use Choose to pick its folder."),
+            }
+            refresh();
+        });
+    }
+    {
+        let path = path.clone();
+        let refresh = refresh.clone();
+        let on_error = on_error.clone();
+        let parent = parent.clone();
+        choose_button.connect_clicked(move |_| {
+            let dialog = gtk::FileDialog::builder()
+                .title("Choose Rocket League's game folder")
+                .build();
+            let (path, refresh, on_error) = (path.clone(), refresh.clone(), on_error.clone());
+            dialog.select_folder(Some(&parent), gtk::gio::Cancellable::NONE, move |result| {
+                let Ok(file) = result else { return }; // cancelled
+                let Some(chosen) = file.path() else { return };
+                match normalize_game_folder(&chosen) {
+                    Some(dir) => {
+                        if let Err(e) = update(&path, |s| s.game_config_dir = Some(dir)) {
+                            on_error(&format!("Could not save: {e}"));
+                        }
+                        refresh();
+                    }
+                    None => on_error(
+                        "That does not look like Rocket League's folder (no TAGame/Config inside).",
+                    ),
+                }
+            });
+        });
+    }
+    {
+        let path = path.clone();
+        let refresh = refresh.clone();
+        let on_error = on_error.clone();
+        on_button.connect_clicked(move |_| {
+            let file = Settings::load(&path)
+                .ok()
+                .and_then(|s| s.game_config_dir)
+                .and_then(|d| statsapi::config_file_in(&d));
+            match file {
+                Some(file) => match statsapi::turn_on_in_file(&file, statsapi::RECOMMENDED_RATE) {
+                    Ok(()) => on_error(
+                        "Stats API turned on. Restart Rocket League for it to take effect.",
+                    ),
+                    Err(e) => on_error(&format!("Could not change {}: {e}", file.display())),
+                },
+                None => on_error("Choose the game folder first."),
+            }
+            refresh();
+        });
+    }
 
     // --- should the app track by itself? ---
     let tracking = adw::PreferencesGroup::builder().title("Tracking").build();
@@ -164,11 +332,6 @@ pub fn open(
     data.add(&rerun);
     page.add(&data);
 
-    let dialog = adw::PreferencesDialog::builder()
-        .title("Settings")
-        .content_width(560)
-        .content_height(640)
-        .build();
     dialog.add(&page);
     {
         let dialog = dialog.clone();

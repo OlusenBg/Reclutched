@@ -4,6 +4,7 @@ pub mod events;
 pub mod parse;
 pub mod playlist;
 pub mod settings;
+pub mod statsapi;
 pub mod storage;
 pub mod tracker;
 

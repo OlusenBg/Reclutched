@@ -149,6 +149,16 @@ impl MainView {
                 "Play a match with Rocket League running. It appears here when the match ends.\nTracking has to be on (top left), and the game's Stats API enabled.",
             )
             .build();
+        let setup_button = gtk::Button::builder()
+            .label("Set up Rocket League\u{2026}")
+            .css_classes(["pill"])
+            .halign(gtk::Align::Center)
+            .build();
+        {
+            let on_settings = on_settings.clone();
+            setup_button.connect_clicked(move |_| on_settings());
+        }
+        status.set_child(Some(&setup_button));
         let empty_header = adw::HeaderBar::new();
         empty_header.pack_start(&empty_light.button);
         empty_header.pack_end(&gear_button(&on_settings));

@@ -85,6 +85,8 @@ pub struct Settings {
     pub auto_track: bool,
     /// False until the first-launch setup in the app has been finished.
     pub setup_complete: bool,
+    /// Rocket League's `TAGame/Config` folder, where the Stats API is switched on.
+    pub game_config_dir: Option<std::path::PathBuf>,
     /// The Rocket League username typed in the setup.
     pub username: Option<String>,
     /// Overlay, two screens or both; chosen in the setup.
@@ -107,6 +109,7 @@ impl Default for Settings {
             my_primary_id: None,
             auto_track: true,
             setup_complete: false,
+            game_config_dir: None,
             username: None,
             display_mode: None,
         }
