@@ -14,6 +14,9 @@
 - **Tracks your matches by itself.** Open the app, start Rocket League, and every match is saved when it ends.
 - **Match history and details.** Result, score, mode and time, then Overview, Players, Goals and Movement
   (possession, boost habits, speed, touches, goals with your boost at that moment).
+- **Live window for a second screen.** Choose *2 Screens* or *Both* in the setup (or settings) and a window opens
+  by itself when a match starts: score and clock, possession for both teams, your boost and speed, a live
+  scoreboard and the latest goals, saves and demolitions. Close it and it stays closed for that match.
 - **Everything is a switch.** Each thing we collect can be turned on or off in the settings.
 - **Light on disk.** Only averages and small event rows are stored, never the raw 10-per-second data.
 

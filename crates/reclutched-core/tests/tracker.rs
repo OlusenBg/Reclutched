@@ -736,3 +736,137 @@ fn new_settings_apply_from_the_next_match_and_keep_my_id() {
     // The id given at the start survived the settings swap, so "Me" was recognised.
     assert_eq!(done.players[done.my_slot].name, "Me");
 }
+
+// ---------- the live view ----------
+
+fn feed_events(tracker: &mut Tracker, events: &[StatsEvent]) {
+    for e in events {
+        tracker.on_event_at(e, T0);
+    }
+}
+
+fn statfeed(name: &str, main: (&str, i64, i64), secondary: Option<(&str, i64, i64)>) -> StatsEvent {
+    let who = |(n, shortcut, team): (&str, i64, i64)| json!({"Name": n, "Shortcut": shortcut, "TeamNum": team});
+    let mut data = json!({
+        "MatchGuid": "G1", "EventName": name, "Type": name, "MainTarget": who(main)
+    });
+    if let Some(s) = secondary {
+        data["SecondaryTarget"] = who(s);
+    }
+    event("StatfeedEvent", data)
+}
+
+#[test]
+fn live_snapshot_shows_the_match_as_it_goes() {
+    let mut tracker = Tracker::new(Settings::default());
+    assert!(tracker.live().is_none(), "nothing is going on yet");
+
+    let mut events = two_v_two(11);
+    // Team 0 (us) touches the ball three times, team 1 once.
+    for team in [0, 0, 0, 1] {
+        events.push(state_ball(
+            11,
+            297,
+            pair(
+                player(1, "Me", 0, 120, Some(40)),
+                player(2, "Mate", 0, 50, Some(80)),
+            ),
+            "Me",
+            [1, 0],
+            (55.0, team),
+        ));
+    }
+    events.push(statfeed("Save", ("Foe1", 3, 1), None));
+    events.push(statfeed("Demolish", ("Me", 1, 0), Some(("Foe2", 4, 1))));
+    events.push(statfeed("Shot", ("Me", 1, 0), None)); // not shown in the live feed
+    feed_events(&mut tracker, &events);
+
+    let live = tracker.live().expect("a live match");
+    assert_eq!(live.seq, 1);
+    assert_eq!(live.playlist_id, 11);
+    assert_eq!(live.team_goals, [1, 0]);
+    assert_eq!(live.team_names, ["Blue".to_string(), "Orange".to_string()]);
+    assert_eq!(live.clock.remaining, 297);
+    assert_eq!(live.my_team, Some(0));
+    assert_eq!(live.winner, None);
+    assert!((live.ball_speed - 55.0).abs() < 1e-9);
+
+    // Possession counts live ticks: the two before the four above had the ball untouched (255).
+    let [blue, orange] = live.possession.unwrap();
+    assert!((blue - 75.0).abs() < 1e-9 && (orange - 25.0).abs() < 1e-9);
+
+    let me = live.players.iter().find(|p| p.is_me).unwrap();
+    assert_eq!(
+        (me.name.as_str(), me.score, me.boost),
+        ("Me", 120, Some(40))
+    );
+    let foe = live.players.iter().find(|p| p.name == "Foe1").unwrap();
+    assert_eq!(foe.boost, None, "no boost for opponents");
+
+    assert_eq!(live.feed.len(), 2);
+    assert_eq!(live.feed[0].name, "Foe1");
+    assert_eq!(live.feed[1].other.as_deref(), Some("Foe2"));
+}
+
+#[test]
+fn live_snapshot_ignores_training_and_works_with_every_collector_off() {
+    let mut tracker = Tracker::new(Settings::default());
+    feed_events(&mut tracker, &two_v_two(9));
+    assert!(tracker.live().is_none(), "training is not a match");
+
+    let mut off = Settings::default();
+    for key in [
+        "movement",
+        "possession",
+        "stat_events",
+        "goals",
+        "ball_hits",
+    ] {
+        off.set(key, false);
+    }
+    let mut tracker = Tracker::new(off);
+    let mut events = two_v_two(11);
+    events.push(state_ball(
+        11,
+        290,
+        pair(
+            player(1, "Me", 0, 0, Some(10)),
+            player(2, "Mate", 0, 0, Some(10)),
+        ),
+        "Me",
+        [0, 0],
+        (10.0, 1),
+    ));
+    events.push(statfeed("Goal", ("Foe1", 3, 1), None));
+    feed_events(&mut tracker, &events);
+    let live = tracker
+        .live()
+        .expect("the live view does not depend on what we store");
+    assert!(live.possession.is_some());
+    assert_eq!(live.feed.len(), 1);
+}
+
+#[test]
+fn live_snapshot_ends_with_the_match_and_the_feed_is_capped() {
+    let mut tracker = Tracker::new(Settings::default());
+    let mut events = two_v_two(11);
+    for i in 0..12 {
+        events.push(statfeed("Save", (&format!("P{i}"), 9, 1), None));
+    }
+    events.push(event(
+        "MatchEnded",
+        json!({ "MatchGuid": "G1", "WinnerTeamNum": 0 }),
+    ));
+    feed_events(&mut tracker, &events);
+    let live = tracker.live().unwrap();
+    assert_eq!(live.winner, Some(0));
+    assert_eq!(live.feed.len(), 8);
+    assert_eq!(live.feed.last().unwrap().name, "P11");
+
+    tracker.on_event_at(&event("MatchDestroyed", guid()), T1);
+    assert!(tracker.live().is_none());
+
+    // The next match has a new number.
+    feed_events(&mut tracker, &two_v_two(11));
+    assert_eq!(tracker.live().unwrap().seq, 2);
+}

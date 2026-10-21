@@ -7,6 +7,7 @@ mod detail;
 mod flow;
 mod format;
 mod list;
+mod live;
 mod mainview;
 mod settings_dialog;
 mod setup;
@@ -22,8 +23,9 @@ use std::time::Duration;
 use adw::prelude::*;
 use clap::Parser;
 use reclutched_core::rocketleague::playlist::default_map_path;
-use reclutched_core::rocketleague::settings::Settings;
+use reclutched_core::rocketleague::settings::{DisplayMode, Settings};
 use reclutched_core::rocketleague::storage::{default_db_path, Store};
+use reclutched_core::rocketleague::tracker::LiveSnapshot;
 use reclutched_daemon::track::{Paths, TrackEvent};
 
 use flow::Step;
@@ -82,6 +84,10 @@ struct App {
     main_view: RefCell<Option<Rc<mainview::MainView>>>,
     /// True once the timer that reads tracker news is running.
     watching: Cell<bool>,
+    /// The live window (modes "2 Screens" and "Both"), while a match is shown.
+    live: RefCell<Option<Rc<live::LiveWindow>>>,
+    /// The newest match whose live window the user closed; it is not opened again for it.
+    live_dismissed: Cell<u64>,
 }
 
 /// Wraps a page with a flat, empty header bar, so the window can be moved and closed
@@ -179,6 +185,7 @@ impl App {
         if let Some(mut running) = running {
             running.stop();
         }
+        self.close_live();
         self.set_status(tracking::Status::Off);
     }
 
@@ -196,7 +203,7 @@ impl App {
             return;
         }
         let app = Rc::downgrade(self);
-        gtk::glib::timeout_add_local(Duration::from_millis(500), move || {
+        gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
             let Some(app) = app.upgrade() else {
                 return gtk::glib::ControlFlow::Break;
             };
@@ -205,12 +212,14 @@ impl App {
         });
     }
 
-    fn apply_updates(&self) {
+    fn apply_updates(self: &Rc<Self>) {
         let updates = match self.tracking.borrow().as_ref() {
             Some(t) => t.drain(),
             None => return,
         };
         let mut ended = None;
+        // Only the newest live picture matters.
+        let mut live_news: Option<Option<Box<LiveSnapshot>>> = None;
         for update in updates {
             match update {
                 tracking::Update::Event(TrackEvent::Connected) => {
@@ -226,17 +235,75 @@ impl App {
                     }
                 }
                 tracking::Update::Event(TrackEvent::PlayerIdLearned) => {}
+                tracking::Update::Event(TrackEvent::Live(snapshot)) => live_news = Some(snapshot),
                 tracking::Update::Event(TrackEvent::Error(message)) => self.toast(&message),
                 tracking::Update::Ended(reason) => ended = Some(reason),
             }
         }
+        if let Some(snapshot) = live_news {
+            self.show_live(snapshot);
+        }
         // The tracker stopped on its own (for example it could not open the database).
         if let Some(reason) = ended {
+            self.close_live();
             self.tracking.borrow_mut().take();
             self.set_status(tracking::Status::Off);
             if let Some(reason) = reason {
                 self.toast(&format!("Tracking stopped: {reason}"));
             }
+        }
+    }
+
+    /// Opens the live window by itself when a match starts (modes "2 Screens" and "Both"),
+    /// and keeps it up to date. Closing it hides it for the rest of that match.
+    fn show_live(self: &Rc<Self>, snapshot: Option<Box<LiveSnapshot>>) {
+        let mode = Settings::load(&self.settings_path)
+            .ok()
+            .and_then(|s| s.display_mode);
+        let wanted = matches!(mode, Some(DisplayMode::TwoScreens | DisplayMode::Both));
+        let existing = self.live.borrow().clone();
+        match snapshot {
+            Some(snapshot) if wanted => {
+                let window = match existing {
+                    Some(window) => window,
+                    None => {
+                        if snapshot.seq <= self.live_dismissed.get() {
+                            return;
+                        }
+                        let Some(application) = self
+                            .window
+                            .application()
+                            .and_then(|a| a.downcast::<adw::Application>().ok())
+                        else {
+                            return;
+                        };
+                        let weak = Rc::downgrade(self);
+                        let window = live::LiveWindow::new(&application, move |seq| {
+                            if let Some(app) = weak.upgrade() {
+                                app.live_dismissed.set(seq);
+                                app.live.borrow_mut().take();
+                            }
+                        });
+                        *self.live.borrow_mut() = Some(window.clone());
+                        window.present();
+                        window
+                    }
+                };
+                window.update(&snapshot);
+            }
+            Some(_) => {}
+            None => {
+                if let Some(window) = existing {
+                    window.ended();
+                }
+            }
+        }
+    }
+
+    fn close_live(&self) {
+        let window = self.live.borrow_mut().take();
+        if let Some(window) = window {
+            window.close();
         }
     }
 
@@ -355,6 +422,8 @@ fn activate(application: &adw::Application, args: &Args) {
         wizard: RefCell::new(None),
         main_view: RefCell::new(None),
         watching: Cell::new(false),
+        live: RefCell::new(None),
+        live_dismissed: Cell::new(0),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped
     // when this function returns and every button handler would find a wizard that is gone.

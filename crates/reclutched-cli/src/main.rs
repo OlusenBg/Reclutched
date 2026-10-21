@@ -151,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     TrackEvent::Error(message) => eprintln!("{message}"),
                     // The connection messages are already logged by the connection itself.
-                    TrackEvent::Waiting | TrackEvent::Connected => {}
+                    TrackEvent::Waiting | TrackEvent::Connected | TrackEvent::Live(_) => {}
                 }
             });
             // Ctrl-C is the stop signal; the tracker saves a match that is already decided first.

@@ -4,7 +4,7 @@
 //! easy to test by feeding it saved events. Raw `UpdateState` snapshots are never kept; we only
 //! remember the last stats per player and a few running totals.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use super::events::{Player, PlayerRef, StatsEvent, UpdateState};
 use super::playlist::is_real_match;
@@ -186,8 +186,72 @@ pub struct FinishedMatch {
     pub movement: Vec<MovementSummary>,
 }
 
+/// What happened, for the live feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveKind {
+    Goal,
+    Save,
+    EpicSave,
+    Demolish,
+}
+
+/// One line of the live feed. `other` is the victim of a demolition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveEvent {
+    pub clock: Clock,
+    pub kind: LiveKind,
+    pub team: i64,
+    pub name: String,
+    pub other: Option<String>,
+}
+
+/// One player in the live scoreboard. `boost` and `speed` are only there for you and your
+/// teammates (the game does not send them for opponents).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LivePlayer {
+    pub name: String,
+    pub team: i64,
+    pub is_me: bool,
+    pub score: i64,
+    pub goals: i64,
+    pub saves: i64,
+    pub shots: i64,
+    pub demos: i64,
+    pub boost: Option<i64>,
+    pub speed: Option<f64>,
+    pub demolished: bool,
+    pub left: bool,
+}
+
+/// The match in progress, as the live window shows it. Built from what the tracker already has
+/// in memory; nothing here is stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveSnapshot {
+    /// Counts up with every match the tracker follows, so a window can tell matches apart.
+    pub seq: u64,
+    pub playlist_id: i64,
+    pub clock: Clock,
+    pub team_goals: [i64; 2],
+    pub team_names: [String; 2],
+    /// Your team (0 = blue, 1 = orange), once the game has told us who you are.
+    pub my_team: Option<i64>,
+    pub replay: bool,
+    /// The match is over; `winner` is the winning team.
+    pub winner: Option<i64>,
+    pub players: Vec<LivePlayer>,
+    /// Share of the time each team last touched the ball so far, in percent.
+    pub possession: Option<[f64; 2]>,
+    pub ball_speed: f64,
+    pub feed: Vec<LiveEvent>,
+}
+
+/// How many feed lines we keep.
+const FEED_LEN: usize = 8;
+
 pub struct Tracker {
     settings: Settings,
+    /// Number of the match being followed (see [`LiveSnapshot::seq`]).
+    seq: u64,
     active: Option<Active>,
     /// Our own player id, found when the first match shows who we are watching.
     learned_id: Option<String>,
@@ -197,6 +261,7 @@ impl Tracker {
     pub fn new(settings: Settings) -> Self {
         Self {
             settings,
+            seq: 0,
             active: None,
             learned_id: None,
         }
@@ -219,12 +284,17 @@ impl Tracker {
                 let mut active = Active::new(now);
                 active.note_guid(m.match_guid.as_deref());
                 self.active = Some(active);
+                self.seq += 1;
                 done
             }
             StatsEvent::MatchDestroyed(_) => self.finish_pending(now),
             StatsEvent::UpdateState(u) => {
                 // We may connect in the middle of a match, so a state update can start tracking.
-                let active = self.active.get_or_insert_with(|| Active::new(now));
+                let seq = &mut self.seq;
+                let active = self.active.get_or_insert_with(|| {
+                    *seq += 1;
+                    Active::new(now)
+                });
                 if let Some(id) = active.on_update_state(u, &self.settings) {
                     // Remember it right away so later matches can tell when we are spectating.
                     self.settings.my_primary_id = Some(id.clone());
@@ -245,6 +315,54 @@ impl Tracker {
     pub fn finish_pending(&mut self, now: i64) -> Option<FinishedMatch> {
         let active = self.active.take()?;
         active.finish(&self.settings, now)
+    }
+
+    /// The match in progress, or `None` when there is none worth showing (nothing is going on,
+    /// it is a replay or someone else's match, or it is not a real match like free play).
+    pub fn live(&self) -> Option<LiveSnapshot> {
+        let a = self.active.as_ref()?;
+        let playlist_id = a.playlist_id?;
+        if a.dropped || !is_real_match(playlist_id) || a.players.len() < 2 {
+            return None;
+        }
+        let my_team = a.my_slot.map(|s| a.players[s].team);
+        let touched = a.live_poss[0] + a.live_poss[1];
+        let possession = (touched > 0).then(|| {
+            let blue = a.live_poss[0] as f64 * 100.0 / touched as f64;
+            [blue, 100.0 - blue]
+        });
+        Some(LiveSnapshot {
+            seq: self.seq,
+            playlist_id,
+            clock: a.clock,
+            team_goals: a.team_goals,
+            team_names: a.team_names.clone(),
+            my_team,
+            replay: a.in_replay(),
+            winner: a.winner,
+            players: a
+                .players
+                .iter()
+                .enumerate()
+                .map(|(slot, p)| LivePlayer {
+                    name: p.name.clone(),
+                    team: p.team,
+                    is_me: Some(slot) == a.my_slot,
+                    score: p.stats[0],
+                    goals: p.stats[1],
+                    shots: p.stats[2],
+                    saves: p.stats[4],
+                    demos: p.stats[7],
+                    boost: p.last_boost,
+                    speed: p.last_speed,
+                    demolished: p.dead,
+                    left: p.left.is_some(),
+                })
+                .collect(),
+            possession,
+            ball_speed: a.ball_speed_now,
+            feed: a.feed.iter().cloned().collect(),
+        })
     }
 
     /// Uses new settings from the next event on (for example after they were changed in the
@@ -333,6 +451,8 @@ struct PlayerAcc {
     /// Latest boost and speed outside replays, used as context for goals and stat events.
     last_boost: Option<i64>,
     last_speed: Option<f64>,
+    /// Demolished (or without a car) in the latest update.
+    dead: bool,
     movement: MoveAcc,
 }
 
@@ -381,6 +501,11 @@ struct Active {
     my_ticks: i64,
     overlap_ticks: i64,
     teammate_seen: bool,
+    /// For the live window only (kept in memory, whatever the collection switches say).
+    live_poss: [i64; 2],
+    ball_speed_now: f64,
+    team_names: [String; 2],
+    feed: VecDeque<LiveEvent>,
 }
 
 impl Active {
@@ -419,6 +544,10 @@ impl Active {
             my_ticks: 0,
             overlap_ticks: 0,
             teammate_seen: false,
+            live_poss: [0, 0],
+            ball_speed_now: 0.0,
+            team_names: [String::new(), String::new()],
+            feed: VecDeque::new(),
         }
     }
 
@@ -489,6 +618,7 @@ impl Active {
             left: None,
             last_boost: None,
             last_speed: None,
+            dead: false,
             movement: MoveAcc::default(),
         });
         self.players.len() - 1
@@ -511,12 +641,16 @@ impl Active {
         self.arena.clone_from(&game.arena);
         self.replay_state = game.replay;
         self.set_clock(game.time_seconds, game.overtime);
+        self.ball_speed_now = game.ball.speed;
         for t in &game.teams {
-            if let Some(g) = usize::try_from(t.team_num)
-                .ok()
-                .and_then(|i| self.team_goals.get_mut(i))
-            {
+            let Ok(i) = usize::try_from(t.team_num) else {
+                continue;
+            };
+            if let Some(g) = self.team_goals.get_mut(i) {
                 *g = t.score;
+            }
+            if let Some(name) = self.team_names.get_mut(i) {
+                name.clone_from(&t.name);
             }
         }
         if let Some(idx) = self.awaiting_score.take() {
@@ -544,6 +678,8 @@ impl Active {
             if !game.replay {
                 acc.last_boost = boost_of(p);
                 acc.last_speed = p.speed;
+                acc.dead =
+                    p.has_car == Some(false) || p.demolished == Some(true) || p.attacker.is_some();
             }
         }
 
@@ -563,6 +699,12 @@ impl Active {
         }
 
         if self.sampling() {
+            if let Some(t) = usize::try_from(game.ball.team_num)
+                .ok()
+                .and_then(|t| self.live_poss.get_mut(t))
+            {
+                *t += 1;
+            }
             if settings.movement {
                 self.sample_movement(u, &slots);
             }
@@ -652,7 +794,33 @@ impl Active {
         }
     }
 
+    /// Adds the events the live window lists (goals, saves, demolitions).
+    fn note_feed(&mut self, name: &str, main: &PlayerRef, secondary: Option<&PlayerRef>) {
+        let kind = match name {
+            "Goal" => LiveKind::Goal,
+            "Save" => LiveKind::Save,
+            "EpicSave" => LiveKind::EpicSave,
+            "Demolish" => LiveKind::Demolish,
+            _ => return,
+        };
+        if self.feed.len() == FEED_LEN {
+            self.feed.pop_front();
+        }
+        self.feed.push_back(LiveEvent {
+            clock: self.clock,
+            kind,
+            team: main.team_num,
+            name: main.name.clone(),
+            other: secondary.map(|t| t.name.clone()),
+        });
+    }
+
     fn on_other(&mut self, event: &StatsEvent, settings: &Settings, now: i64) {
+        if let StatsEvent::StatfeedEvent(s) = event {
+            if self.collecting() {
+                self.note_feed(&s.event_name, &s.main_target, s.secondary_target.as_ref());
+            }
+        }
         match event {
             StatsEvent::ClockUpdatedSeconds(c) => {
                 self.note_guid(c.match_guid.as_deref());

@@ -10,16 +10,20 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use reclutched_core::rocketleague::playlist::PlaylistMap;
 use reclutched_core::rocketleague::settings::Settings;
 use reclutched_core::rocketleague::storage::Store;
-use reclutched_core::rocketleague::tracker::{FinishedMatch, MatchResult, Tracker};
+use reclutched_core::rocketleague::tracker::{FinishedMatch, LiveSnapshot, MatchResult, Tracker};
 use reclutched_core::rocketleague::{parse_message, StatsEvent};
 use tokio::sync::broadcast::{self, error::RecvError};
 
 use crate::source;
+
+/// The live view is refreshed at most this often by the game's frequent updates.
+const LIVE_EVERY: Duration = Duration::from_millis(250);
 
 /// How many events the bus holds for a slow subscriber before it starts losing the oldest.
 const BUS_CAPACITY: usize = 4096;
@@ -42,6 +46,8 @@ pub enum TrackEvent {
     MatchSaved { id: i64, summary: String },
     /// We found out who you are and saved your player id.
     PlayerIdLearned,
+    /// The match in progress (a few times a second), or `None` once there is none.
+    Live(Option<Box<LiveSnapshot>>),
     /// Something went wrong that the user should know about.
     Error(String),
 }
@@ -116,6 +122,8 @@ async fn write_loop(
     report: Reporter,
 ) {
     let mut tracker = Tracker::new(settings);
+    let mut last_live: Option<Instant> = None;
+    let mut live_shown = false;
     loop {
         let event = match rx.recv().await {
             Ok(event) => event,
@@ -152,8 +160,35 @@ async fn write_loop(
         if let Some(m) = finished {
             save(&mut store, &m, &names, &report);
         }
+
+        // The frequent events are throttled; everything else (goals, the end of the match, ...)
+        // is passed on right away.
+        let frequent = matches!(
+            event,
+            StatsEvent::UpdateState(_)
+                | StatsEvent::BallHit(_)
+                | StatsEvent::BoostPickup(_)
+                | StatsEvent::ClockUpdatedSeconds(_)
+        );
+        if !frequent || last_live.is_none_or(|t| t.elapsed() >= LIVE_EVERY) {
+            match tracker.live() {
+                Some(snapshot) => {
+                    report(TrackEvent::Live(Some(Box::new(snapshot))));
+                    live_shown = true;
+                    last_live = Some(Instant::now());
+                }
+                None if live_shown => {
+                    report(TrackEvent::Live(None));
+                    live_shown = false;
+                }
+                None => {}
+            }
+        }
     }
 
+    if live_shown {
+        report(TrackEvent::Live(None));
+    }
     // Shutting down: save a match that already has a result.
     if let Some(m) = tracker.finish_pending(now_unix()) {
         save(&mut store, &m, &names, &report);

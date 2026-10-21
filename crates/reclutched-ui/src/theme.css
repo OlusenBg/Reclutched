@@ -170,3 +170,20 @@ button.status-button { padding: 4px 10px; border-radius: 10px; }
 .status-dot.waiting { background: #c99a3a; }
 .status-dot.active { background: #5fa371; }
 .sidebar-footer { background: #181414; border-top: 1px solid #231d1d; padding: 6px 10px; }
+
+/* ---------- live window ---------- */
+.team-blue { color: #4f8fe0; }
+.team-orange { color: #e88a3a; }
+.live-title { font-weight: 500; }
+.live-flag { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; color: #d9534f; }
+.live-flag.final { color: #8b817e; }
+.live-ended { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; color: #c99a3a; margin-bottom: 10px; }
+.live-team { font-size: 12px; font-weight: 600; letter-spacing: 0.16em; }
+.live-score { font-size: 72px; font-weight: 200; font-feature-settings: "tnum"; }
+.live-clock { font-size: 34px; font-weight: 300; font-feature-settings: "tnum"; color: #e9e3e1; }
+.live-boost { font-size: 40px; font-weight: 200; font-feature-settings: "tnum"; color: #e9e3e1; }
+progressbar.big-bar trough { min-height: 10px; border-radius: 5px; }
+progressbar.big-bar progress { min-height: 10px; border-radius: 5px; }
+progressbar.team-blue progress { background: #4f8fe0; }
+progressbar.team-orange progress { background: #e88a3a; }
+.cell-dim { color: #6f6563; }
