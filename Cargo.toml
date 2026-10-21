@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# A plain `cargo build` builds everything except the GTK app, so it needs no GTK libraries.
+# Build the app with `cargo build -p reclutched-ui`.
+default-members = ["crates/reclutched-core", "crates/reclutched-daemon", "crates/reclutched-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,3 +27,6 @@ serde_json = "1"
 thiserror = "2"
 # "bundled" compiles SQLite into our binary, so users need no system libsqlite.
 rusqlite = { version = "0.40", features = ["bundled"] }
+# Renamed so code says `gtk::` and `adw::`.
+gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.7", features = ["v1_5"] }

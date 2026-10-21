@@ -1,0 +1,15 @@
+[package]
+name = "reclutched-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "reclutched-ui"
+path = "src/main.rs"
+
+[dependencies]
+reclutched-core = { path = "../reclutched-core" }
+clap.workspace = true
+gtk.workspace = true
+adw.workspace = true

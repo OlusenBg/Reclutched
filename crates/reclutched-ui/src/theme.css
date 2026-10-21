@@ -1,0 +1,81 @@
+/* Reclutched: dark, red, minimal. libadwaita reads these named colours, so the whole app follows them. */
+@define-color window_bg_color #141111;
+@define-color window_fg_color #e9e3e1;
+@define-color view_bg_color #181414;
+@define-color view_fg_color #e9e3e1;
+@define-color card_bg_color #1d1818;
+@define-color card_fg_color #e9e3e1;
+@define-color headerbar_bg_color #141111;
+@define-color headerbar_fg_color #e9e3e1;
+@define-color headerbar_border_color #141111;
+@define-color accent_bg_color #a32630;
+@define-color accent_color #d9505b;
+@define-color accent_fg_color #ffffff;
+
+window { background: #141111; }
+
+/* ---------- splash ---------- */
+.logo-placeholder {
+    min-width: 72px;
+    min-height: 72px;
+    border-radius: 20px;
+    border: 2px solid #a32630;
+    background: rgba(163, 38, 48, 0.10);
+}
+.logo-placeholder label { font-size: 32px; font-weight: 300; color: #d9505b; }
+.wordmark { font-size: 30px; font-weight: 300; letter-spacing: 0.4em; color: #e9e3e1; }
+.tagline { font-size: 12px; color: #8b817e; letter-spacing: 0.08em; }
+
+/* ---------- setup ---------- */
+.setup-title { font-size: 30px; font-weight: 300; color: #e9e3e1; }
+.setup-sub { font-size: 15px; color: #b3a9a6; }
+.setup-note { font-size: 11px; color: #8b817e; }
+.setup-hint { font-size: 12px; color: #8b817e; }
+.setup-error { font-size: 12px; color: #d9534f; }
+
+entry.setup-entry {
+    font-size: 18px;
+    padding: 12px 16px;
+    min-height: 28px;
+    border-radius: 12px;
+    background: #1d1818;
+    border: 1px solid #2c2424;
+    box-shadow: none;
+    color: #e9e3e1;
+}
+entry.setup-entry:focus-within { border-color: #a32630; }
+
+button.choice {
+    padding: 18px 22px;
+    border-radius: 14px;
+    background: #1d1818;
+    border: 1px solid #2c2424;
+    box-shadow: none;
+}
+button.choice:hover { border-color: #7d1d26; background: #221b1b; }
+button.choice.selected { border-color: #a32630; background: rgba(163, 38, 48, 0.14); }
+.choice-num { font-size: 13px; font-weight: 400; color: #8b817e; min-width: 22px; }
+.choice-title { font-size: 17px; font-weight: 500; color: #e9e3e1; }
+.choice-desc { font-size: 13px; font-weight: 400; color: #a2989a; }
+
+list.boxed-list { background: transparent; box-shadow: none; }
+list.boxed-list > row { background: #1d1818; border: 1px solid #2c2424; border-radius: 12px; margin-bottom: 8px; }
+
+.summary-key { font-size: 12px; color: #8b817e; letter-spacing: 0.06em; }
+.summary-val { font-size: 16px; color: #e9e3e1; }
+
+.dot { min-width: 6px; min-height: 6px; border-radius: 3px; background: #3a3030; }
+.dot.active { min-width: 20px; background: #a32630; }
+
+button.flat-nav { background: transparent; box-shadow: none; color: #b3a9a6; padding: 8px 16px; border-radius: 10px; font-weight: 400; }
+button.flat-nav:hover { background: #1d1818; color: #e9e3e1; }
+button.primary-nav {
+    background: #a32630;
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 9px 26px;
+    box-shadow: none;
+    font-weight: 500;
+}
+button.primary-nav:hover { background: #bd2f3b; }
+button.primary-nav:disabled { background: #2a2222; color: #6b6262; }
