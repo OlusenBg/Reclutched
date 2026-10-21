@@ -11,7 +11,6 @@ use reclutched_core::rocketleague::settings::{DisplayMode, Settings};
 use crate::flow::{
     username_error, SetupKind, SetupState, Step, ADV_EVENTS, ADV_HABITS, ADV_MATCHES,
 };
-use crate::ready::fact;
 
 /// The wizard. Widgets call back into it through `Weak` pointers so nothing keeps it alive
 /// longer than the window needs it (a plain `Rc` in every closure would form a cycle).
@@ -46,7 +45,7 @@ fn name_of(step: Step) -> &'static str {
 }
 
 /// Friendly titles for the switches (the descriptions come from `TOGGLES`).
-fn switch_title(name: &str) -> &'static str {
+pub fn switch_title(name: &str) -> &'static str {
     match name {
         "matches" => "Match results",
         "roster" => "Players and their stats",
@@ -63,7 +62,7 @@ fn switch_title(name: &str) -> &'static str {
 }
 
 /// One calm sentence per switch.
-fn switch_subtitle(name: &str) -> &'static str {
+pub fn switch_subtitle(name: &str) -> &'static str {
     match name {
         "matches" => {
             "Win or loss, the score and matches you left early. Turning this off stores nothing."
@@ -648,4 +647,25 @@ fn set_selected(card: &gtk::Button, selected: bool) {
     } else {
         card.remove_css_class("selected");
     }
+}
+
+/// A small caption with a value underneath, used on the summary page.
+fn fact(key: &str, value: &str) -> gtk::Widget {
+    let k = gtk::Label::builder()
+        .label(key)
+        .css_classes(["summary-key"])
+        .halign(gtk::Align::Start)
+        .build();
+    let v = gtk::Label::builder()
+        .label(value)
+        .css_classes(["summary-val"])
+        .halign(gtk::Align::Start)
+        .build();
+    let b = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(2)
+        .build();
+    b.append(&k);
+    b.append(&v);
+    b.upcast()
 }

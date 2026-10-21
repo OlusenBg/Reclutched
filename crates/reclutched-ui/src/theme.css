@@ -79,3 +79,89 @@ button.primary-nav {
 }
 button.primary-nav:hover { background: #bd2f3b; }
 button.primary-nav:disabled { background: #2a2222; color: #6b6262; }
+
+/* ---------- main window ---------- */
+headerbar { background: #141111; box-shadow: none; border-bottom: 1px solid #231d1d; min-height: 46px; }
+headerbar.flat { border-bottom: none; }
+windowtitle .title { font-weight: 500; }
+windowtitle .subtitle { font-size: 11px; color: #8b817e; }
+
+.navigation-sidebar, .sidebar-pane { background: #181414; }
+list.match-list { background: #181414; padding: 8px 8px; }
+list.match-list > row.match-row {
+    background: transparent;
+    border-radius: 12px;
+    padding: 12px 8px 12px 12px;
+    margin-bottom: 2px;
+    border: none;
+    box-shadow: none;
+}
+list.match-list > row.match-row:hover { background: #1f1919; }
+list.match-list > row.match-row:selected { background: rgba(163, 38, 48, 0.16); }
+
+.stripe { border-radius: 2px; min-height: 34px; }
+.stripe.win { background: #5fa371; }
+.stripe.loss { background: #d9534f; }
+.stripe.abandoned { background: #c99a3a; }
+
+.row-mode { font-size: 14px; font-weight: 500; color: #e9e3e1; }
+.row-when { font-size: 12px; color: #8b817e; }
+.row-note { font-size: 12px; color: #8b817e; }
+.row-score { font-size: 18px; font-weight: 300; font-feature-settings: "tnum"; }
+.row-score.win, .big-result.win { color: #5fa371; }
+.row-score.loss, .big-result.loss { color: #d9534f; }
+.row-score.abandoned, .big-result.abandoned { color: #c99a3a; }
+
+/* ---------- details ---------- */
+.big-result { font-size: 13px; font-weight: 600; letter-spacing: 0.22em; padding-top: 14px; }
+.big-score { font-size: 54px; font-weight: 200; font-feature-settings: "tnum"; color: #e9e3e1; }
+.head-sub { font-size: 13px; color: #a2989a; }
+.section-label { font-size: 11px; font-weight: 500; letter-spacing: 0.14em; color: #8b817e; }
+.muted-note { font-size: 13px; color: #8b817e; }
+.fact { font-size: 13px; color: #b3a9a6; margin-top: 8px; }
+
+.tile {
+    background: #1d1818;
+    border: 1px solid #2a2222;
+    border-radius: 14px;
+    padding: 14px 16px;
+}
+.tile-key { font-size: 10px; font-weight: 500; letter-spacing: 0.12em; color: #8b817e; }
+.tile-val { font-size: 28px; font-weight: 300; font-feature-settings: "tnum"; color: #e9e3e1; }
+.tile-hint { font-size: 11px; color: #6f6563; }
+.stat-val { font-size: 22px; font-weight: 300; font-feature-settings: "tnum"; color: #e9e3e1; }
+.stat-small { font-size: 15px; font-weight: 400; font-feature-settings: "tnum"; color: #e9e3e1; }
+
+.table-head { font-size: 10px; font-weight: 500; letter-spacing: 0.1em; color: #6f6563; text-transform: uppercase; }
+.cell { font-size: 14px; font-feature-settings: "tnum"; color: #cfc7c5; }
+.cell-me { color: #ffffff; font-weight: 500; }
+
+.goal-time { font-size: 14px; color: #8b817e; font-feature-settings: "tnum"; min-width: 56px; }
+.goal-score { font-size: 15px; color: #8b817e; font-feature-settings: "tnum"; }
+.goal-mine { color: #e9e3e1; font-weight: 500; }
+.goal-theirs { color: #a2989a; }
+
+.player-card {
+    background: #1d1818;
+    border: 1px solid #2a2222;
+    border-radius: 14px;
+    padding: 16px 18px;
+}
+progressbar.thin-bar trough { min-height: 6px; background: #2b2323; border-radius: 3px; }
+progressbar.thin-bar progress { min-height: 6px; background: #a32630; border-radius: 3px; }
+
+/* Text-only tabs: flat buttons, the current one gets a crimson underline. */
+stackswitcher.tabs { background: transparent; }
+stackswitcher.tabs > button {
+    background: transparent;
+    box-shadow: none;
+    border: none;
+    border-radius: 0;
+    padding: 6px 16px;
+    color: #8b817e;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+}
+stackswitcher.tabs > button:hover { color: #e9e3e1; }
+stackswitcher.tabs > button:checked { color: #ffffff; background: transparent; border-bottom: 2px solid #a32630; }
+statuspage > scrolledwindow > viewport > box > clamp > box > .title { font-weight: 300; }

@@ -1,10 +1,14 @@
 //! Reclutched desktop app.
 //!
-//! Right now this is the first-launch flow: a loading screen, then the setup wizard, then a
-//! simple "ready" page. The match history and details come next.
+//! First launch: a loading screen, then the setup wizard. After that the main window with your
+//! match history, the details of each match and the settings.
 
+mod detail;
 mod flow;
-mod ready;
+mod format;
+mod list;
+mod mainview;
+mod settings_dialog;
 mod setup;
 mod splash;
 
@@ -15,7 +19,9 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use clap::Parser;
+use reclutched_core::rocketleague::playlist::default_map_path;
 use reclutched_core::rocketleague::settings::Settings;
+use reclutched_core::rocketleague::storage::{default_db_path, Store};
 
 use flow::Step;
 
@@ -28,6 +34,9 @@ struct Args {
     /// Settings file (default: ~/.config/reclutched/settings.json).
     #[arg(long)]
     settings: Option<PathBuf>,
+    /// Match database (default: ~/.local/share/reclutched/matches.db).
+    #[arg(long)]
+    db: Option<PathBuf>,
     /// Run the first-launch setup again, even if it was finished.
     #[arg(long)]
     reset_setup: bool,
@@ -39,13 +48,27 @@ struct Args {
     page: Option<String>,
 }
 
-/// Everything the window needs to move between its three screens.
+/// Everything the window needs to move between its screens.
 struct App {
+    window: adw::ApplicationWindow,
     pages: gtk::Stack,
     toasts: adw::ToastOverlay,
     settings_path: PathBuf,
-    /// Keeps the current wizard alive while it is on screen.
+    db_path: PathBuf,
+    /// Keep the current screens alive while they are shown.
     wizard: RefCell<Option<Rc<setup::Wizard>>>,
+    main_view: RefCell<Option<Rc<mainview::MainView>>>,
+}
+
+/// Wraps a page with a flat, empty header bar, so the window can be moved and closed
+/// on desktops that draw their own window decorations (GNOME).
+fn with_chrome(content: &gtk::Widget) -> gtk::Widget {
+    let header = adw::HeaderBar::builder().css_classes(["flat"]).build();
+    header.set_show_title(false);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&header);
+    view.set_content(Some(content));
+    view.upcast()
 }
 
 impl App {
@@ -61,15 +84,50 @@ impl App {
         self.pages.add_named(widget, Some(name));
     }
 
-    fn show_ready(self: &Rc<Self>, settings: &Settings) {
+    /// The main window: your matches. Needs the database.
+    fn show_main(self: &Rc<Self>) {
+        let store = match Store::open(&self.db_path) {
+            Ok(store) => Rc::new(store),
+            Err(err) => {
+                let status = adw::StatusPage::builder()
+                    .title("Could not open the match database")
+                    .description(format!("{}\n{err}", self.db_path.display()))
+                    .build();
+                self.set_page("error", &with_chrome(status.upcast_ref()));
+                self.pages.set_visible_child_name("error");
+                return;
+            }
+        };
         let app = Rc::downgrade(self);
-        let page = ready::build(settings, move || {
+        let on_settings: Rc<dyn Fn()> = Rc::new(move || {
             if let Some(app) = app.upgrade() {
-                app.show_setup(None);
+                app.open_settings();
             }
         });
-        self.set_page("ready", &page);
-        self.pages.set_visible_child_name("ready");
+        let view = mainview::MainView::new(store, default_map_path(), on_settings);
+        self.set_page("main", view.widget.upcast_ref());
+        self.pages.set_visible_child_name("main");
+        *self.main_view.borrow_mut() = Some(view);
+    }
+
+    fn open_settings(self: &Rc<Self>) {
+        let again = Rc::downgrade(self);
+        let failed = Rc::downgrade(self);
+        settings_dialog::open(
+            &self.window,
+            self.settings_path.clone(),
+            self.db_path.clone(),
+            move || {
+                if let Some(app) = again.upgrade() {
+                    app.show_setup(None);
+                }
+            },
+            move |message| {
+                if let Some(app) = failed.upgrade() {
+                    app.toast(message);
+                }
+            },
+        );
     }
 
     /// Starts the setup from the settings that are saved now. `jump` opens a later step directly.
@@ -80,13 +138,13 @@ impl App {
             let Some(app) = app.upgrade() else { return };
             match settings.save(&app.settings_path) {
                 Ok(()) => {
-                    app.show_ready(&settings);
+                    app.show_main();
                     app.wizard.borrow_mut().take();
                 }
                 Err(err) => app.toast(&format!("Could not save your settings: {err}")),
             }
         });
-        self.set_page("setup", &wizard.widget());
+        self.set_page("setup", &with_chrome(&wizard.widget()));
         self.pages.set_visible_child_name("setup");
         if let Some(step) = jump {
             wizard.jump(step);
@@ -139,25 +197,33 @@ fn activate(application: &adw::Application, args: &Args) {
         .transition_type(gtk::StackTransitionType::Crossfade)
         .transition_duration(450)
         .build();
-    pages.add_named(&splash::build(), Some("splash"));
+    pages.add_named(&with_chrome(&splash::build()), Some("splash"));
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&pages));
 
     let window = adw::ApplicationWindow::builder()
         .application(application)
         .title("Reclutched")
-        .default_width(960)
-        .default_height(640)
-        .width_request(560)
+        .default_width(1100)
+        .default_height(700)
+        .width_request(780)
         .height_request(520)
         .content(&toasts)
         .build();
 
+    let db_path = args
+        .db
+        .clone()
+        .or_else(default_db_path)
+        .unwrap_or_else(|| PathBuf::from("matches.db"));
     let app = Rc::new(App {
+        window: window.clone(),
         pages,
         toasts,
         settings_path,
+        db_path,
         wizard: RefCell::new(None),
+        main_view: RefCell::new(None),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped
     // when this function returns and every button handler would find a wizard that is gone.
@@ -171,7 +237,11 @@ fn activate(application: &adw::Application, args: &Args) {
     if let Some(name) = args.page.as_deref() {
         match (name, page_step(name)) {
             ("splash", _) => {}
-            ("ready", _) => app.show_ready(&settings),
+            ("main", _) => app.show_main(),
+            ("settings", _) => {
+                app.show_main();
+                app.open_settings();
+            }
             (_, Some(step)) => app.show_setup(Some(step)),
             _ => eprintln!("unknown page '{name}'"),
         }
@@ -188,7 +258,7 @@ fn activate(application: &adw::Application, args: &Args) {
         if first_launch {
             app.show_setup(None);
         } else {
-            app.show_ready(&settings);
+            app.show_main();
         }
     });
 }
