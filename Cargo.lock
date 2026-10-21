@@ -965,6 +965,8 @@ dependencies = [
  "gtk4",
  "libadwaita",
  "reclutched-core",
+ "reclutched-daemon",
+ "tokio",
 ]
 
 [[package]]

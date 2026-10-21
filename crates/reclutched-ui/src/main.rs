@@ -11,8 +11,9 @@ mod mainview;
 mod settings_dialog;
 mod setup;
 mod splash;
+mod tracking;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,6 +23,7 @@ use clap::Parser;
 use reclutched_core::rocketleague::playlist::default_map_path;
 use reclutched_core::rocketleague::settings::Settings;
 use reclutched_core::rocketleague::storage::{default_db_path, Store};
+use reclutched_daemon::track::{Paths, TrackEvent};
 
 use flow::Step;
 
@@ -37,6 +39,9 @@ struct Args {
     /// Match database (default: ~/.local/share/reclutched/matches.db).
     #[arg(long)]
     db: Option<PathBuf>,
+    /// Address of Rocket League's Stats API websocket.
+    #[arg(long, default_value = "127.0.0.1:49124")]
+    addr: String,
     /// Run the first-launch setup again, even if it was finished.
     #[arg(long)]
     reset_setup: bool,
@@ -55,9 +60,14 @@ struct App {
     toasts: adw::ToastOverlay,
     settings_path: PathBuf,
     db_path: PathBuf,
+    addr: String,
+    /// The tracker, while it is running.
+    tracking: RefCell<Option<tracking::Tracking>>,
     /// Keep the current screens alive while they are shown.
     wizard: RefCell<Option<Rc<setup::Wizard>>>,
     main_view: RefCell<Option<Rc<mainview::MainView>>>,
+    /// True once the timer that reads tracker news is running.
+    watching: Cell<bool>,
 }
 
 /// Wraps a page with a flat, empty header bar, so the window can be moved and closed
@@ -104,10 +114,110 @@ impl App {
                 app.open_settings();
             }
         });
-        let view = mainview::MainView::new(store, default_map_path(), on_settings);
+        let toggle = Rc::downgrade(self);
+        let on_toggle: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(app) = toggle.upgrade() {
+                app.toggle_tracking();
+            }
+        });
+        let view = mainview::MainView::new(store, default_map_path(), on_settings, on_toggle);
         self.set_page("main", view.widget.upcast_ref());
         self.pages.set_visible_child_name("main");
         *self.main_view.borrow_mut() = Some(view);
+
+        // Track by itself, unless the user turned that off.
+        let wanted = Settings::load(&self.settings_path)
+            .unwrap_or_default()
+            .auto_track;
+        if wanted && self.tracking.borrow().is_none() {
+            self.start_tracking();
+        } else {
+            self.set_status(tracking::Status::Off);
+        }
+        self.watch_tracking();
+    }
+
+    fn set_status(&self, status: tracking::Status) {
+        if let Some(view) = self.main_view.borrow().as_ref() {
+            view.set_status(status);
+        }
+    }
+
+    fn start_tracking(&self) {
+        let paths = Paths {
+            db: self.db_path.clone(),
+            settings: self.settings_path.clone(),
+            playlist_map: default_map_path(),
+        };
+        *self.tracking.borrow_mut() = Some(tracking::Tracking::start(self.addr.clone(), paths));
+        self.set_status(tracking::Status::Waiting);
+    }
+
+    fn stop_tracking(&self) {
+        // Take it out first, so nothing can touch it while it saves and shuts down.
+        let running = self.tracking.borrow_mut().take();
+        if let Some(mut running) = running {
+            running.stop();
+        }
+        self.set_status(tracking::Status::Off);
+    }
+
+    fn toggle_tracking(&self) {
+        if self.tracking.borrow().is_some() {
+            self.stop_tracking();
+        } else {
+            self.start_tracking();
+        }
+    }
+
+    /// Checks the tracker for news twice a second and shows it. Runs for as long as the app lives.
+    fn watch_tracking(self: &Rc<Self>) {
+        if self.watching.replace(true) {
+            return;
+        }
+        let app = Rc::downgrade(self);
+        gtk::glib::timeout_add_local(Duration::from_millis(500), move || {
+            let Some(app) = app.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            app.apply_updates();
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
+    fn apply_updates(&self) {
+        let updates = match self.tracking.borrow().as_ref() {
+            Some(t) => t.drain(),
+            None => return,
+        };
+        let mut ended = None;
+        for update in updates {
+            match update {
+                tracking::Update::Event(TrackEvent::Connected) => {
+                    self.set_status(tracking::Status::Active);
+                }
+                tracking::Update::Event(TrackEvent::Waiting) => {
+                    self.set_status(tracking::Status::Waiting);
+                }
+                tracking::Update::Event(TrackEvent::MatchSaved { summary, .. }) => {
+                    self.toast(&format!("Saved: {summary}"));
+                    if let Some(view) = self.main_view.borrow().as_ref() {
+                        view.reload();
+                    }
+                }
+                tracking::Update::Event(TrackEvent::PlayerIdLearned) => {}
+                tracking::Update::Event(TrackEvent::Error(message)) => self.toast(&message),
+                tracking::Update::Ended(reason) => ended = Some(reason),
+            }
+        }
+        // The tracker stopped on its own (for example it could not open the database).
+        if let Some(reason) = ended {
+            self.tracking.borrow_mut().take();
+            self.set_status(tracking::Status::Off);
+            if let Some(reason) = reason {
+                self.toast(&format!("Tracking stopped: {reason}"));
+            }
+        }
     }
 
     fn open_settings(self: &Rc<Self>) {
@@ -222,8 +332,11 @@ fn activate(application: &adw::Application, args: &Args) {
         toasts,
         settings_path,
         db_path,
+        addr: args.addr.clone(),
+        tracking: RefCell::new(None),
         wizard: RefCell::new(None),
         main_view: RefCell::new(None),
+        watching: Cell::new(false),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped
     // when this function returns and every button handler would find a wizard that is gone.
@@ -231,6 +344,15 @@ fn activate(application: &adw::Application, args: &Args) {
     window.connect_destroy(move |_| {
         let _ = &keep_alive;
     });
+    {
+        let closing = Rc::downgrade(&app);
+        window.connect_close_request(move |_| {
+            if let Some(app) = closing.upgrade() {
+                app.stop_tracking();
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
     window.present();
 
     // Developer shortcut: open one page right away.

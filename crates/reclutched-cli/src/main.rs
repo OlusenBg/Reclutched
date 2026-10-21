@@ -138,8 +138,27 @@ async fn main() -> anyhow::Result<()> {
                 })?,
                 playlist_map: reclutched_core::rocketleague::playlist::default_map_path(),
             };
-            // `track` handles Ctrl-C itself so it can save the match in progress first.
-            reclutched_daemon::track::run(&addr, paths).await
+            println!("Saving matches to {}", paths.db.display());
+            println!("Waiting for Rocket League (Ctrl-C to stop)...");
+            let report: reclutched_daemon::track::Reporter = std::sync::Arc::new(|event| {
+                use reclutched_daemon::track::TrackEvent;
+                match event {
+                    TrackEvent::MatchSaved { id, summary } => {
+                        println!("Saved match #{id}: {summary}")
+                    }
+                    TrackEvent::PlayerIdLearned => {
+                        println!("Learned your player id and saved it in the settings.");
+                    }
+                    TrackEvent::Error(message) => eprintln!("{message}"),
+                    // The connection messages are already logged by the connection itself.
+                    TrackEvent::Waiting | TrackEvent::Connected => {}
+                }
+            });
+            // Ctrl-C is the stop signal; the tracker saves a match that is already decided first.
+            let stop = async {
+                let _ = tokio::signal::ctrl_c().await;
+            };
+            reclutched_daemon::track::run(&addr, paths, report, stop).await
         }
         Command::Map { addr, file } => {
             let path = file

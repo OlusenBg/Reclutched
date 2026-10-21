@@ -10,6 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 reclutched-core = { path = "../reclutched-core" }
+reclutched-daemon = { path = "../reclutched-daemon" }
+tokio.workspace = true
 clap.workspace = true
 gtk.workspace = true
 adw.workspace = true

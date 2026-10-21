@@ -81,6 +81,8 @@ pub struct Settings {
     pub offline_matches: bool,
     /// Your own player id, remembered after the first tracked match (not a switch).
     pub my_primary_id: Option<String>,
+    /// The app starts tracking by itself when it opens (not a "what to collect" switch).
+    pub auto_track: bool,
     /// False until the first-launch setup in the app has been finished.
     pub setup_complete: bool,
     /// The Rocket League username typed in the setup.
@@ -103,6 +105,7 @@ impl Default for Settings {
             possession: true,
             offline_matches: false,
             my_primary_id: None,
+            auto_track: true,
             setup_complete: false,
             username: None,
             display_mode: None,
@@ -215,10 +218,15 @@ mod tests {
     fn setup_fields_default_to_first_launch_and_old_files_still_load() {
         let s = Settings::default();
         assert!(!s.setup_complete && s.username.is_none() && s.display_mode.is_none());
+        assert!(s.auto_track, "tracking from the app is on by default");
         // A file written before these fields existed.
         let old: Settings =
             serde_json::from_str(r#"{ "goals": false, "my_primary_id": "Epic|1|0" }"#).unwrap();
         assert!(!old.goals && !old.setup_complete && old.username.is_none());
+        assert!(
+            old.auto_track,
+            "files from before this setting existed get the default"
+        );
     }
 
     #[test]

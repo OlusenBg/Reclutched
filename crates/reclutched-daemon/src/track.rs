@@ -7,7 +7,9 @@
 //! The bus is a tokio `broadcast` channel: every subscriber gets its own copy of each event.
 //! Right now only the writer listens; the clipper and the overlay will subscribe here later.
 
+use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use reclutched_core::rocketleague::playlist::PlaylistMap;
@@ -29,8 +31,32 @@ pub struct Paths {
     pub playlist_map: Option<PathBuf>,
 }
 
-/// Runs until Ctrl-C, then saves the match in progress (if it was already decided) and returns.
-pub async fn run(addr: &str, paths: Paths) -> Result<()> {
+/// What the tracker tells whoever started it (the terminal, or the app).
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrackEvent {
+    /// The game is not reachable (yet, or any more).
+    Waiting,
+    /// Connected to the game's Stats API.
+    Connected,
+    /// A finished match was written to the database.
+    MatchSaved { id: i64, summary: String },
+    /// We found out who you are and saved your player id.
+    PlayerIdLearned,
+    /// Something went wrong that the user should know about.
+    Error(String),
+}
+
+/// Called for every [`TrackEvent`]. It can run on any thread, so it must be `Send + Sync`.
+pub type Reporter = Arc<dyn Fn(TrackEvent) + Send + Sync>;
+
+/// Runs until `stop` finishes, then saves the match in progress (if it was already decided)
+/// and returns. The terminal passes Ctrl-C as `stop`; the app passes a "stop tracking" signal.
+pub async fn run(
+    addr: &str,
+    paths: Paths,
+    report: Reporter,
+    stop: impl Future<Output = ()>,
+) -> Result<()> {
     let settings = Settings::load(&paths.settings)
         .with_context(|| format!("loading {}", paths.settings.display()))?;
     let store = Store::open(&paths.db)
@@ -39,8 +65,6 @@ pub async fn run(addr: &str, paths: Paths) -> Result<()> {
         Some(p) => PlaylistMap::load(p).unwrap_or_else(|_| PlaylistMap::with_builtin()),
         None => PlaylistMap::with_builtin(),
     };
-    println!("Saving matches to {}", paths.db.display());
-    println!("Waiting for Rocket League (Ctrl-C to stop)...");
 
     let (bus, writer_rx) = broadcast::channel::<StatsEvent>(BUS_CAPACITY);
     let writer = tokio::spawn(write_loop(
@@ -49,9 +73,19 @@ pub async fn run(addr: &str, paths: Paths) -> Result<()> {
         paths.settings,
         store,
         names,
+        report.clone(),
     ));
 
-    let mut raw = source::spawn(addr);
+    let status_report = report.clone();
+    let mut raw = source::spawn_with_status(addr, move |connected| {
+        status_report(if connected {
+            TrackEvent::Connected
+        } else {
+            TrackEvent::Waiting
+        });
+    });
+    // `stop` is a future we poll again and again in the loop, so it has to be pinned first.
+    tokio::pin!(stop);
     loop {
         tokio::select! {
             msg = raw.recv() => {
@@ -63,7 +97,7 @@ pub async fn run(addr: &str, paths: Paths) -> Result<()> {
                     Err(err) => tracing::warn!("could not parse a message: {err}"),
                 }
             }
-            _ = tokio::signal::ctrl_c() => break,
+            () = &mut stop => break,
         }
     }
 
@@ -79,6 +113,7 @@ async fn write_loop(
     settings_path: PathBuf,
     mut store: Store,
     names: PlaylistMap,
+    report: Reporter,
 ) {
     let mut tracker = Tracker::new(settings);
     loop {
@@ -108,28 +143,35 @@ async fn write_loop(
             let mut saved = Settings::load(&settings_path).unwrap_or_default();
             saved.my_primary_id = Some(id);
             match saved.save(&settings_path) {
-                Ok(()) => println!("Learned your player id and saved it in the settings."),
-                Err(err) => tracing::error!("could not save your player id: {err}"),
+                Ok(()) => report(TrackEvent::PlayerIdLearned),
+                Err(err) => report(TrackEvent::Error(format!(
+                    "could not save your player id: {err}"
+                ))),
             }
         }
         if let Some(m) = finished {
-            save(&mut store, &m, &names);
+            save(&mut store, &m, &names, &report);
         }
     }
 
     // Shutting down: save a match that already has a result.
     if let Some(m) = tracker.finish_pending(now_unix()) {
-        save(&mut store, &m, &names);
+        save(&mut store, &m, &names, &report);
     }
 }
 
-/// Saves one match and tells the player. (SQLite is quick here, one small transaction per
-/// match, so blocking the async task for a moment is fine.)
-fn save(store: &mut Store, m: &FinishedMatch, names: &PlaylistMap) {
+/// Saves one match and reports it. (SQLite is quick here, one small transaction per match,
+/// so blocking the async task for a moment is fine.)
+fn save(store: &mut Store, m: &FinishedMatch, names: &PlaylistMap, report: &Reporter) {
     match store.save_match(m) {
-        Ok(Some(id)) => println!("Saved match #{id}: {}", describe(m, names)),
+        Ok(Some(id)) => report(TrackEvent::MatchSaved {
+            id,
+            summary: describe(m, names),
+        }),
         Ok(None) => tracing::debug!("match was already saved"),
-        Err(err) => tracing::error!("could not save the match: {err}"),
+        Err(err) => report(TrackEvent::Error(format!(
+            "could not save the match: {err}"
+        ))),
     }
 }
 

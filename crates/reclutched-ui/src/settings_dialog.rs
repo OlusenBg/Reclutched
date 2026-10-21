@@ -88,6 +88,26 @@ pub fn open(
     profile.add(&mode_row);
     page.add(&profile);
 
+    // --- should the app track by itself? ---
+    let tracking = adw::PreferencesGroup::builder().title("Tracking").build();
+    let auto_row = adw::SwitchRow::builder()
+        .title("Track matches when the app opens")
+        .subtitle("The app watches Rocket League and saves every match. You can also switch it on and off from the main window.")
+        .active(current.auto_track)
+        .build();
+    {
+        let path = path.clone();
+        let on_error = on_error.clone();
+        auto_row.connect_active_notify(move |row| {
+            let on = row.is_active();
+            if let Err(e) = update(&path, |s| s.auto_track = on) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    tracking.add(&auto_row);
+    page.add(&tracking);
+
     // --- the tracking switches, in the same three groups as the Advanced setup ---
     let groups: [(&str, &[&str]); 3] = [
         ("Matches and players", &ADV_MATCHES),
