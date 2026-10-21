@@ -407,11 +407,13 @@ fn activate(application: &adw::Application, args: &Args) {
     });
 }
 
+const APP_ID: &str = "dev.reclutched.Reclutched";
+
 fn main() -> gtk::glib::ExitCode {
     let args = Args::parse();
-    let application = adw::Application::builder()
-        .application_id("dev.reclutched.Reclutched")
-        .build();
+    let application = adw::Application::builder().application_id(APP_ID).build();
+    // Found once the desktop entry and icon are installed (packaging/install-desktop.sh or the package).
+    application.connect_startup(|_| gtk::Window::set_default_icon_name(APP_ID));
     application.connect_activate(move |app| activate(app, &args));
     // clap already read the command line, so GTK gets none.
     application.run_with_args::<&str>(&[])

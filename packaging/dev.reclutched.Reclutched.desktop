@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Reclutched
+GenericName=Game stats tracker
+Comment=Calm, local stats for Rocket League
+Exec=reclutched-ui
+Icon=dev.reclutched.Reclutched
+Terminal=false
+Categories=Game;Utility;
+Keywords=rocket league;stats;match history;
+StartupWMClass=dev.reclutched.Reclutched

@@ -1,17 +1,17 @@
-//! The loading screen: a placeholder logo (the real one comes later) and a spinner.
+//! The loading screen: the logo and a spinner.
 
 use gtk::prelude::*;
 
+const LOGO: &[u8] = include_bytes!("../assets/logo.png");
+
 pub fn build() -> gtk::Widget {
-    let logo_letter = gtk::Label::new(Some("R"));
-    let logo = gtk::Box::builder()
-        .css_classes(["logo-placeholder"])
+    let logo = gtk::Image::builder()
+        .pixel_size(128)
         .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
         .build();
-    logo.append(&logo_letter);
-    logo_letter.set_hexpand(true);
-    logo_letter.set_vexpand(true);
+    if let Ok(texture) = gtk::gdk::Texture::from_bytes(&gtk::glib::Bytes::from_static(LOGO)) {
+        logo.set_paintable(Some(&texture));
+    }
 
     let wordmark = gtk::Label::builder()
         .label("RECLUTCHED")

@@ -40,7 +40,25 @@ reclutched-ui
 The first build takes a few minutes. Cargo installs into `~/.cargo/bin`, so make sure that folder is in your
 `PATH` (fish: `fish_add_path ~/.cargo/bin`).
 
+To get it in your app launcher (menu entry and icon), run this once from the repository folder:
+
+```bash
+packaging/install-desktop.sh            # undo with: packaging/install-desktop.sh --remove
+```
+
 The first launch walks you through a short setup. `reclutched-ui --reset-setup` runs it again.
+
+### Arch package (PKGBUILD)
+
+`packaging/aur/PKGBUILD` builds and installs everything properly (both programs, the launcher entry and the
+icon) as a package, so pacman can update or remove it:
+
+```bash
+cd packaging/aur
+makepkg -si
+```
+
+It is not published on the AUR yet.
 
 ### Turn on the Stats API
 

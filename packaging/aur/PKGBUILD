@@ -1,0 +1,44 @@
+# Maintainer: OlusenBg
+# Builds the latest `dev` branch for now. After the first release, switch to `#branch=main` (or a tag).
+pkgname=reclutched-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Calm, local stats tracker for Rocket League (GTK4 app and CLI)'
+arch=('x86_64')
+url='https://github.com/OlusenBg/Reclutched'
+license=('MIT')
+depends=('gtk4' 'libadwaita')
+makedepends=('cargo' 'git')
+provides=('reclutched')
+conflicts=('reclutched')
+source=("$pkgname::git+$url.git#branch=dev")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$pkgname"
+    printf '%s.r%s.%s' "$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" \
+        "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd "$pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --release --frozen -p reclutched-ui -p reclutched-cli
+}
+
+package() {
+    cd "$pkgname"
+    install -Dm755 target/release/reclutched-ui "$pkgdir/usr/bin/reclutched-ui"
+    install -Dm755 target/release/reclutched "$pkgdir/usr/bin/reclutched"
+    install -Dm644 packaging/dev.reclutched.Reclutched.desktop \
+        "$pkgdir/usr/share/applications/dev.reclutched.Reclutched.desktop"
+    install -Dm644 branding/logo/icon.svg \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.reclutched.Reclutched.svg"
+}

@@ -15,14 +15,6 @@
 window { background: #141111; }
 
 /* ---------- splash ---------- */
-.logo-placeholder {
-    min-width: 72px;
-    min-height: 72px;
-    border-radius: 20px;
-    border: 2px solid #a32630;
-    background: rgba(163, 38, 48, 0.10);
-}
-.logo-placeholder label { font-size: 32px; font-weight: 300; color: #d9505b; }
 .wordmark { font-size: 30px; font-weight: 300; letter-spacing: 0.4em; color: #e9e3e1; }
 .tagline { font-size: 12px; color: #8b817e; letter-spacing: 0.08em; }
 
