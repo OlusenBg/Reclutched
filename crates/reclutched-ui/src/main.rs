@@ -48,9 +48,22 @@ struct Args {
     /// Developer option: how long the loading screen lasts, in milliseconds.
     #[arg(long, hide = true)]
     splash_ms: Option<u64>,
+    /// Developer option: window size as WIDTHxHEIGHT, e.g. 640x520 (for screenshots).
+    #[arg(long, hide = true, value_parser = parse_size)]
+    size: Option<(i32, i32)>,
     /// Developer option: open one page directly (for screenshots).
     #[arg(long, hide = true)]
     page: Option<String>,
+}
+
+fn parse_size(text: &str) -> Result<(i32, i32), String> {
+    let (w, h) = text
+        .split_once('x')
+        .ok_or("use WIDTHxHEIGHT, e.g. 640x520")?;
+    Ok((
+        w.parse().map_err(|_| "bad width")?,
+        h.parse().map_err(|_| "bad height")?,
+    ))
 }
 
 /// Everything the window needs to move between its screens.
@@ -120,7 +133,13 @@ impl App {
                 app.toggle_tracking();
             }
         });
-        let view = mainview::MainView::new(store, default_map_path(), on_settings, on_toggle);
+        let view = mainview::MainView::new(
+            &self.window,
+            store,
+            default_map_path(),
+            on_settings,
+            on_toggle,
+        );
         self.set_page("main", view.widget.upcast_ref());
         self.pages.set_visible_child_name("main");
         *self.main_view.borrow_mut() = Some(view);
@@ -294,7 +313,11 @@ fn activate(application: &adw::Application, args: &Args) {
         .clone()
         .or_else(Settings::default_path)
         .unwrap_or_else(|| PathBuf::from("settings.json"));
-    let settings = Settings::load(&settings_path).unwrap_or_default();
+    // A settings file we cannot read counts as "not set up yet", and we say so after the window opens.
+    let (settings, settings_problem) = match Settings::load(&settings_path) {
+        Ok(settings) => (settings, None),
+        Err(err) => (Settings::default(), Some(err.to_string())),
+    };
     let first_launch = !settings.setup_complete || args.reset_setup;
 
     let pages = gtk::Stack::builder()
@@ -308,10 +331,10 @@ fn activate(application: &adw::Application, args: &Args) {
     let window = adw::ApplicationWindow::builder()
         .application(application)
         .title("Reclutched")
-        .default_width(1100)
-        .default_height(700)
-        .width_request(780)
-        .height_request(520)
+        .default_width(args.size.map_or(1100, |s| s.0))
+        .default_height(args.size.map_or(700, |s| s.1))
+        .width_request(700)
+        .height_request(480)
         .content(&toasts)
         .build();
 
@@ -348,6 +371,11 @@ fn activate(application: &adw::Application, args: &Args) {
         });
     }
     window.present();
+    if let Some(problem) = settings_problem {
+        app.toast(&format!(
+            "Your settings file could not be read, so we start fresh ({problem})"
+        ));
+    }
 
     // Developer shortcut: open one page right away.
     if let Some(name) = args.page.as_deref() {

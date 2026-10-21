@@ -157,8 +157,9 @@ stackswitcher.tabs > button {
     box-shadow: none;
     border: none;
     border-radius: 0;
-    padding: 6px 16px;
+    padding: 6px 8px;
     color: #8b817e;
+    font-size: 13px;
     font-weight: 500;
     border-bottom: 2px solid transparent;
 }
@@ -173,3 +174,4 @@ button.status-button { padding: 4px 10px; border-radius: 10px; }
 .status-dot.off { background: #4a4040; }
 .status-dot.waiting { background: #c99a3a; }
 .status-dot.active { background: #5fa371; }
+.sidebar-footer { background: #181414; border-top: 1px solid #231d1d; padding: 6px 10px; }

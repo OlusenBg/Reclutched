@@ -34,6 +34,16 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
         .build()
 }
 
+/// A player name that is cut off with "…" when it is very long (the full name shows on hover),
+/// so one huge gamertag can never make the window wider than the screen.
+fn name_label(text: &str, classes: &[&str]) -> gtk::Label {
+    let l = label(text, classes);
+    l.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    l.set_max_width_chars(22);
+    l.set_tooltip_text(Some(text));
+    l
+}
+
 fn vbox(spacing: i32) -> gtk::Box {
     gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -74,9 +84,12 @@ fn scroll_page(content: &gtk::Box) -> gtk::ScrolledWindow {
         .maximum_size(760)
         .child(content)
         .build();
+    // Horizontal scrolling only appears if something is wider than the window. With `Never` the
+    // width of the content would also set the minimum width of the whole window.
     gtk::ScrolledWindow::builder()
         .child(&clamp)
-        .hscrollbar_policy(gtk::PolicyType::Never)
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_width(0)
         .vexpand(true)
         .build()
 }
@@ -194,7 +207,15 @@ impl DetailView {
 
         // Four quiet tiles.
         let me_move = d.movement.iter().find(|m| m.slot == d.my_slot);
-        let tiles = gtk::Box::builder().spacing(12).homogeneous(true).build();
+        // A flow box: four tiles in a row when there is room, two by two when there is not.
+        let tiles = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .min_children_per_line(2)
+            .max_children_per_line(4)
+            .column_spacing(12)
+            .row_spacing(12)
+            .homogeneous(true)
+            .build();
         tiles.set_margin_top(24);
         tiles.append(&tile(
             "Possession",
@@ -325,7 +346,7 @@ impl DetailView {
                     &["cell"]
                 };
                 grid.attach(
-                    &label(&player_name(&d.players, p.slot), classes),
+                    &name_label(&player_name(&d.players, p.slot), classes),
                     0,
                     r,
                     1,
@@ -384,12 +405,12 @@ impl DetailView {
                 .map(|p| p.team);
             let mine = scorer_team == Some(d.row.my_team);
             let who = vbox(1);
-            who.append(&label(
+            who.append(&name_label(
                 &player_name(&d.players, g.scorer),
                 &["cell", if mine { "goal-mine" } else { "goal-theirs" }],
             ));
             if let Some(a) = g.assister {
-                who.append(&label(
+                who.append(&name_label(
                     &format!("assist {}", player_name(&d.players, a)),
                     &["row-note"],
                 ));
@@ -515,7 +536,7 @@ fn movement_card(m: &MovementSummary, name: &str, is_me: bool) -> gtk::Box {
     card.set_margin_top(14);
 
     let top = gtk::Box::builder().spacing(14).build();
-    top.append(&label(
+    top.append(&name_label(
         name,
         &["cell", if is_me { "cell-me" } else { "cell" }],
     ));
@@ -567,7 +588,7 @@ fn touch_row(t: &TouchSummary, name: &str, is_me: bool) -> gtk::Box {
     let row = vbox(5);
     row.set_margin_top(12);
     let top = gtk::Box::builder().spacing(12).build();
-    top.append(&label(
+    top.append(&name_label(
         name,
         &["cell", if is_me { "cell-me" } else { "cell" }],
     ));

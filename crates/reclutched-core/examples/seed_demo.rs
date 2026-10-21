@@ -1,6 +1,7 @@
 //! Writes a few made-up matches into a database, so the app can be tried without playing.
 //!
 //!     cargo run -p reclutched-core --example seed_demo -- /tmp/demo.db
+//!     cargo run -p reclutched-core --example seed_demo -- /tmp/demo.db 500   # plus 500 more
 //!
 //! Everything here is invented (names, numbers); it goes through the real `Store`, so it also
 //! checks that the schema accepts realistic data.
@@ -311,6 +312,95 @@ fn main() {
             ],
         );
         store.save_match(&m).unwrap();
+    }
+    // 8. Awkward data on purpose: long and unusual names, and a match without stored names or
+    //    goals (as if those switches had been off).
+    let mut m = base(
+        "DEMO0000000000000000000000000020",
+        now - 8 * 86400,
+        3,
+        "Stadium_P",
+        MatchResult::Win,
+        [2, 1],
+        false,
+        vec![
+            player(0, "Zed", 0, true, [500, 2, 3, 0, 1, 20, 9, 0], None),
+            player(
+                1,
+                "A_Very_Long_Gamertag_That_Goes_On_And_On_1234567890",
+                0,
+                false,
+                [200, 0, 1, 1, 1, 15, 7, 0],
+                None,
+            ),
+            player(
+                2,
+                "\u{0418}\u{0433}\u{0440}\u{0438}\u{0441} \u{30A2}\u{30EA}\u{30B9} \u{1F680}",
+                1,
+                false,
+                [300, 1, 2, 0, 2, 18, 8, 1],
+                None,
+            ),
+            player(
+                3,
+                "<b>Markup & \"quotes\"</b>",
+                1,
+                false,
+                [150, 0, 1, 0, 0, 12, 6, 0],
+                None,
+            ),
+        ],
+    );
+    m.goals = vec![goal(200, 1, Some(0), 70.0, 33, [1, 0])];
+    store.save_match(&m).unwrap();
+    let mut m = base(
+        "DEMO0000000000000000000000000021",
+        now - 9 * 86400,
+        3,
+        "Stadium_P",
+        MatchResult::Loss,
+        [0, 1],
+        false,
+        vec![
+            player(0, "", 0, true, [0; 8], None),
+            player(1, "", 1, false, [0; 8], None),
+        ],
+    );
+    m.my_possession_pct = None;
+    m.ball_avg_speed = None;
+    m.ball_max_speed = None;
+    m.team_empty_overlap = None;
+    store.save_match(&m).unwrap();
+
+    // Optionally lots of history, to check the list stays fast.
+    if let Some(extra) = std::env::args().nth(2).and_then(|n| n.parse::<i64>().ok()) {
+        for i in 0..extra {
+            let result = [
+                MatchResult::Win,
+                MatchResult::Loss,
+                MatchResult::Win,
+                MatchResult::Abandoned,
+            ][(i % 4) as usize];
+            let m = base(
+                &format!("BULK{i:028}"),
+                now - (10 + i) * 3600,
+                [3, 11, 13, 1][(i % 4) as usize],
+                "Stadium_P",
+                result,
+                match result {
+                    MatchResult::Win => [2 + i % 3, i % 2],
+                    MatchResult::Loss => [i % 2, 2 + i % 3],
+                    MatchResult::Abandoned => [1, 1],
+                },
+                i % 7 == 0,
+                vec![
+                    player(0, "Zed", 0, true, [300, 1, 3, 0, 1, 20, 9, 0], None),
+                    player(1, "Nova", 1, false, [200, 1, 2, 0, 1, 15, 7, 0], None),
+                ],
+            );
+            store.save_match(&m).unwrap();
+        }
+        println!("... plus {extra} bulk matches");
     }
     println!("Wrote demo matches to {path}");
 }

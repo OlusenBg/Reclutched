@@ -17,9 +17,12 @@ use crate::tracking::Status;
 /// How many matches the list loads. Plenty; each row is tiny.
 const LIST_LIMIT: u32 = 500;
 const POLL_SECONDS: u32 = 2;
+/// Window width (in pixels) under which the list and the details are shown one at a time.
+const NARROW_WIDTH: f64 = 1000.0;
 
 pub struct MainView {
     pub widget: gtk::Stack,
+    split: adw::NavigationSplitView,
     store: Rc<Store>,
     names: RefCell<PlaylistMap>,
     names_path: Option<PathBuf>,
@@ -83,6 +86,7 @@ impl StatusLight {
 
 impl MainView {
     pub fn new(
+        window: &adw::ApplicationWindow,
         store: Rc<Store>,
         names_path: Option<PathBuf>,
         on_settings: Rc<dyn Fn()>,
@@ -100,6 +104,9 @@ impl MainView {
             MatchList::new(move |id| {
                 if let Some(this) = weak_self.borrow().as_ref().and_then(std::rc::Weak::upgrade) {
                     this.show_match(id);
+                    // In the narrow layout the list and the details are two screens; a click
+                    // on a match goes to its details.
+                    this.split.set_show_content(true);
                 }
             })
         };
@@ -110,10 +117,13 @@ impl MainView {
         let empty_light = StatusLight::new(on_toggle_tracking);
         let side_header = adw::HeaderBar::new();
         side_header.set_title_widget(Some(&title));
-        side_header.pack_start(&light.button);
         let side = adw::ToolbarView::new();
         side.add_top_bar(&side_header);
         side.set_content(Some(&list.widget));
+        // The tracking light lives under the list, so it never competes with the title.
+        let footer = gtk::Box::builder().css_classes(["sidebar-footer"]).build();
+        footer.append(&light.button);
+        side.add_bottom_bar(&footer);
         let side_page = adw::NavigationPage::builder()
             .title("Matches")
             .child(&side)
@@ -141,6 +151,17 @@ impl MainView {
             .max_sidebar_width(380.0)
             .sidebar_width_fraction(0.33)
             .build();
+
+        // Below this width the window shows one screen at a time (the list, then the details
+        // with a back button) instead of both side by side. The side-by-side layout needs about
+        // 960 px, so the limit must be above that.
+        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            NARROW_WIDTH,
+            adw::LengthUnit::Px,
+        ));
+        narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
+        window.add_breakpoint(narrow);
 
         // --- the empty state: nothing saved yet ---
         let status = adw::StatusPage::builder()
@@ -174,6 +195,7 @@ impl MainView {
 
         let this = Rc::new(Self {
             widget,
+            split,
             store,
             names: RefCell::new(names),
             names_path,
