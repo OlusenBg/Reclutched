@@ -223,6 +223,11 @@ impl MainView {
         this
     }
 
+    /// Developer helper for screenshots: picks a detail tab by name.
+    pub fn show_tab(&self, name: &str) {
+        self.detail.stack.set_visible_child_name(name);
+    }
+
     /// Updates the status light (in both headers).
     pub fn set_status(&self, status: Status) {
         self.light.set(status);

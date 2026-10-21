@@ -139,6 +139,9 @@ list.match-list > row.match-row:selected { background: rgba(163, 38, 48, 0.16); 
     border-radius: 14px;
     padding: 16px 18px;
 }
+.player-card.me { border-color: #5a2328; background: #1f1819; }
+.tile.small { padding: 10px 14px; border-radius: 12px; }
+.tile.small .tile-val { font-size: 22px; }
 progressbar.thin-bar trough { min-height: 6px; background: #2b2323; border-radius: 3px; }
 progressbar.thin-bar progress { min-height: 6px; background: #a32630; border-radius: 3px; }
 

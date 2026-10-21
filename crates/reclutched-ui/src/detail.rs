@@ -4,11 +4,17 @@
 use adw::prelude::*;
 use reclutched_core::rocketleague::playlist::PlaylistMap;
 use reclutched_core::rocketleague::storage::MatchDetail;
-use reclutched_core::rocketleague::tracker::{MovementSummary, PlayerSummary, TouchSummary};
+use reclutched_core::rocketleague::tracker::{
+    GoalRow, MovementSummary, PlayerSummary, TouchSummary,
+};
 
 use crate::format::{
     clock_text, mode_name, pct, player_name, result_class, result_word, score_from_my_side,
     score_text, when_label,
+};
+use crate::widgets::{
+    bar, clear, empty_note, label, meter, name_label, scroll_page, section, small_tile, split_bar,
+    stripe, thirds_bar, tile, vbox,
 };
 
 pub struct DetailView {
@@ -17,122 +23,6 @@ pub struct DetailView {
     players: gtk::Box,
     goals: gtk::Box,
     movement: gtk::Box,
-}
-
-// ---------- small building blocks ----------
-
-fn label(text: &str, classes: &[&str]) -> gtk::Label {
-    let wraps = classes
-        .iter()
-        .any(|c| matches!(*c, "head-sub" | "muted-note" | "fact"));
-    gtk::Label::builder()
-        .label(text)
-        .css_classes(classes.iter().map(|c| c.to_string()).collect::<Vec<_>>())
-        .halign(gtk::Align::Start)
-        .xalign(0.0)
-        .wrap(wraps)
-        .build()
-}
-
-/// A player name that is cut off with "…" when it is very long (the full name shows on hover),
-/// so one huge gamertag can never make the window wider than the screen.
-fn name_label(text: &str, classes: &[&str]) -> gtk::Label {
-    let l = label(text, classes);
-    l.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    l.set_max_width_chars(22);
-    l.set_tooltip_text(Some(text));
-    l
-}
-
-fn vbox(spacing: i32) -> gtk::Box {
-    gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(spacing)
-        .build()
-}
-
-fn section(title: &str) -> gtk::Label {
-    let l = label(&title.to_uppercase(), &["section-label"]);
-    l.set_margin_top(26);
-    l
-}
-
-/// A muted one-liner for things we don't have (a switch was off, or the game didn't send it).
-fn empty_note(text: &str) -> gtk::Label {
-    let l = label(text, &["muted-note"]);
-    l.set_margin_top(6);
-    l
-}
-
-/// A big quiet number with a small caption.
-fn tile(key: &str, value: &str, hint: &str) -> gtk::Box {
-    let b = vbox(2);
-    b.add_css_class("tile");
-    b.set_hexpand(true);
-    b.append(&label(&key.to_uppercase(), &["tile-key"]));
-    b.append(&label(value, &["tile-val"]));
-    b.append(&label(hint, &["tile-hint"]));
-    b
-}
-
-fn scroll_page(content: &gtk::Box) -> gtk::ScrolledWindow {
-    content.set_margin_top(28);
-    content.set_margin_bottom(32);
-    content.set_margin_start(28);
-    content.set_margin_end(28);
-    let clamp = adw::Clamp::builder()
-        .maximum_size(760)
-        .child(content)
-        .build();
-    // Horizontal scrolling only appears if something is wider than the window. With `Never` the
-    // width of the content would also set the minimum width of the whole window.
-    gtk::ScrolledWindow::builder()
-        .child(&clamp)
-        .hscrollbar_policy(gtk::PolicyType::Automatic)
-        .min_content_width(0)
-        .vexpand(true)
-        .build()
-}
-
-fn clear(b: &gtk::Box) {
-    while let Some(child) = b.first_child() {
-        b.remove(&child);
-    }
-}
-
-/// A thin horizontal bar for a value between 0 and 1.
-fn bar(fraction: f64) -> gtk::ProgressBar {
-    gtk::ProgressBar::builder()
-        .fraction(fraction.clamp(0.0, 1.0))
-        .css_classes(["thin-bar"])
-        .hexpand(true)
-        .valign(gtk::Align::Center)
-        .build()
-}
-
-/// A bar split in three parts (own third, middle, enemy third) in proportion to the numbers.
-fn thirds_bar(def: i64, mid: i64, att: i64) -> gtk::DrawingArea {
-    let total = (def + mid + att).max(1) as f64;
-    let parts = [def as f64 / total, mid as f64 / total, att as f64 / total];
-    let area = gtk::DrawingArea::builder()
-        .content_height(8)
-        .hexpand(true)
-        .build();
-    area.set_draw_func(move |_, cr, width, height| {
-        let (w, h) = (f64::from(width), f64::from(height));
-        let colors = [(0.36, 0.30, 0.30), (0.55, 0.47, 0.47), (0.64, 0.15, 0.19)];
-        let mut x = 0.0;
-        for (part, (r, g, b)) in parts.iter().zip(colors) {
-            let seg = (w * part - 2.0).max(0.0);
-            if seg > 0.0 {
-                cr.set_source_rgb(r, g, b);
-                cr.rectangle(x, 0.0, seg, h);
-                let _ = cr.fill();
-            }
-            x += w * part;
-        }
-    });
-    area
 }
 
 // ---------- the view ----------
@@ -220,7 +110,7 @@ impl DetailView {
         tiles.append(&tile(
             "Possession",
             &d.my_possession_pct.map_or("\u{2013}".into(), pct),
-            "your team had the ball",
+            "time with the ball",
         ));
         tiles.append(&tile(
             "Avg boost",
@@ -235,66 +125,90 @@ impl DetailView {
         tiles.append(&tile(
             "Touches",
             &touch_share(d).map_or("\u{2013}".into(), pct),
-            "of your team's touches",
+            "of team touches",
         ));
         b.append(&tiles);
 
-        // Your numbers.
+        // Your numbers, as small tiles.
         b.append(&section("Your match"));
         if let Some(me) = d.players.iter().find(|p| p.slot == d.my_slot) {
-            let grid = gtk::Grid::builder()
-                .column_spacing(34)
-                .row_spacing(4)
+            let stats = gtk::FlowBox::builder()
+                .selection_mode(gtk::SelectionMode::None)
+                .min_children_per_line(3)
+                .max_children_per_line(6)
+                .column_spacing(10)
+                .row_spacing(10)
+                .homogeneous(true)
+                .margin_top(8)
                 .build();
-            let stats = [
+            for (key, value) in [
                 ("Score", me.score),
                 ("Goals", me.goals),
                 ("Assists", me.assists),
                 ("Saves", me.saves),
                 ("Shots", me.shots),
                 ("Demos", me.demos),
-            ];
-            for (i, (key, value)) in stats.into_iter().enumerate() {
-                let col = i as i32;
-                grid.attach(&label(&key.to_uppercase(), &["tile-key"]), col, 0, 1, 1);
-                grid.attach(&label(&value.to_string(), &["stat-val"]), col, 1, 1, 1);
+            ] {
+                stats.append(&small_tile(key, &value.to_string()));
             }
-            b.append(&grid);
-            // Shots that did not score.
-            if me.shots > 0 {
-                let missed = ((me.shots - me.goals).max(0) as f64) * 100.0 / me.shots as f64;
-                b.append(&label(
-                    &format!(
-                        "{} of your {} shots missed ({}).",
-                        me.shots - me.goals,
-                        me.shots,
-                        pct(missed)
-                    ),
-                    &["fact"],
-                ));
-            }
+            b.append(&stats);
         } else {
             b.append(&empty_note("Player stats were not stored for this match."));
         }
 
-        // A few more facts, only when we have them.
-        let mut facts = Vec::new();
-        if let (Some(avg), Some(max)) = (d.ball_avg_speed, d.ball_max_speed) {
-            facts.push(format!(
-                "The ball averaged {avg} km/h and peaked at {max} km/h."
-            ));
+        // How the match went, as bars. Only what we have.
+        let card = vbox(16);
+        card.add_css_class("player-card");
+        card.set_margin_top(16);
+        let mut rows = 0;
+        if let Some(p) = d.my_possession_pct {
+            let block = vbox(6);
+            let top = gtk::Box::builder().spacing(12).build();
+            top.append(&label("POSSESSION", &["tile-key"]));
+            let v = label(
+                &format!("You {}  \u{00B7}  Them {}", pct(p), pct(100.0 - p)),
+                &["stat-small"],
+            );
+            v.set_hexpand(true);
+            v.set_halign(gtk::Align::End);
+            top.append(&v);
+            block.append(&top);
+            block.append(&split_bar(p, MINE, THEIRS));
+            card.append(&block);
+            rows += 1;
+        }
+        if let Some(me) = d.players.iter().find(|p| p.slot == d.my_slot) {
+            if me.shots > 0 {
+                card.append(&meter(
+                    "Shot accuracy",
+                    &format!("{} of {} shots scored", me.goals, me.shots),
+                    me.goals as f64 / me.shots as f64,
+                ));
+                rows += 1;
+            }
         }
         if let Some(o) = d.team_empty_overlap {
-            facts.push(format!(
-                "You and a teammate were both out of boost {} of the time.",
-                pct(o)
+            card.append(&meter(
+                "You and a teammate both out of boost",
+                &pct(o),
+                o / 100.0,
             ));
+            rows += 1;
         }
-        if !facts.is_empty() {
-            b.append(&section("Also"));
-            for f in facts {
-                b.append(&label(&f, &["fact"]));
-            }
+        if let (Some(avg), Some(max)) = (d.ball_avg_speed, d.ball_max_speed) {
+            card.append(&meter(
+                "Ball speed (average / top)",
+                &format!("{avg} / {max} km/h"),
+                if max > 0 {
+                    avg as f64 / max as f64
+                } else {
+                    0.0
+                },
+            ));
+            rows += 1;
+        }
+        if rows > 0 {
+            b.append(&card);
         }
     }
 
@@ -305,12 +219,8 @@ impl DetailView {
             return;
         }
         let my_team = d.row.my_team;
-        // One grid for both teams, so the columns line up.
-        let grid = gtk::Grid::builder()
-            .column_spacing(24)
-            .row_spacing(6)
-            .build();
-        let mut r = 0;
+        let max_score = d.players.iter().map(|p| p.score).max().unwrap_or(0).max(1);
+        let mut first = true;
         for (title, mine) in [("Your team", true), ("Opponents", false)] {
             let group: Vec<&PlayerSummary> = d
                 .players
@@ -320,61 +230,20 @@ impl DetailView {
             if group.is_empty() {
                 continue;
             }
-            let heading = section(title);
-            heading.set_margin_top(if r == 0 { 0 } else { 30 });
-            grid.attach(&heading, 0, r, 9, 1);
-            r += 1;
-            for (c, head) in [
-                "Player", "Score", "Goals", "Assists", "Saves", "Shots", "Demos", "Touches",
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let l = label(head, &["table-head"]);
-                l.set_margin_top(8);
-                if c > 0 {
-                    l.set_halign(gtk::Align::End);
-                    l.set_xalign(1.0);
-                }
-                grid.attach(&l, c as i32, r, 1, 1);
-            }
-            r += 1;
+            let (team_goals, other_goals) = if my_team == 0 {
+                (d.row.team0_goals, d.row.team1_goals)
+            } else {
+                (d.row.team1_goals, d.row.team0_goals)
+            };
+            let goals = if mine { team_goals } else { other_goals };
+            let heading = section(&format!("{title}  \u{00B7}  {goals} goals"));
+            heading.set_margin_top(if first { 0 } else { 30 });
+            first = false;
+            b.append(&heading);
             for p in group {
-                let classes: &[&str] = if p.is_me {
-                    &["cell", "cell-me"]
-                } else {
-                    &["cell"]
-                };
-                grid.attach(
-                    &name_label(&player_name(&d.players, p.slot), classes),
-                    0,
-                    r,
-                    1,
-                    1,
-                );
-                let numbers = [
-                    p.score, p.goals, p.assists, p.saves, p.shots, p.demos, p.touches,
-                ];
-                for (c, n) in numbers.into_iter().enumerate() {
-                    let l = label(&n.to_string(), classes);
-                    l.set_halign(gtk::Align::End);
-                    l.set_xalign(1.0);
-                    grid.attach(&l, c as i32 + 1, r, 1, 1);
-                }
-                // Someone who left early gets a quiet note after the numbers.
-                if let Some(left) = p.left {
-                    grid.attach(
-                        &label(&format!("left at {}", clock_text(left)), &["row-note"]),
-                        8,
-                        r,
-                        1,
-                        1,
-                    );
-                }
-                r += 1;
+                b.append(&player_card(p, &player_name(&d.players, p.slot), max_score));
             }
         }
-        b.append(&grid);
     }
 
     fn fill_goals(&self, d: &MatchDetail) {
@@ -387,56 +256,14 @@ impl DetailView {
             }));
             return;
         }
+        let max_speed = d.goals.iter().map(|g| g.goal_speed).fold(1.0, f64::max);
         b.append(&label(
             "Goals in the order they happened. The time is the match clock.",
             &["head-sub"],
         ));
-        let grid = gtk::Grid::builder()
-            .column_spacing(26)
-            .row_spacing(10)
-            .margin_top(16)
-            .build();
-        for (r, g) in d.goals.iter().enumerate() {
-            let r = r as i32;
-            let scorer_team = d
-                .players
-                .iter()
-                .find(|p| p.slot == g.scorer)
-                .map(|p| p.team);
-            let mine = scorer_team == Some(d.row.my_team);
-            let who = vbox(1);
-            who.append(&name_label(
-                &player_name(&d.players, g.scorer),
-                &["cell", if mine { "goal-mine" } else { "goal-theirs" }],
-            ));
-            if let Some(a) = g.assister {
-                who.append(&name_label(
-                    &format!("assist {}", player_name(&d.players, a)),
-                    &["row-note"],
-                ));
-            }
-            let time = label(&clock_text(g.clock), &["goal-time"]);
-            time.set_valign(gtk::Align::Start);
-            grid.attach(&time, 0, r, 1, 1);
-            grid.attach(&who, 1, r, 1, 1);
-
-            let mut details = format!("{:.0} km/h shot", g.goal_speed);
-            if let Some(boost) = g.scorer_boost {
-                details.push_str(&format!("  \u{00B7}  {boost} boost"));
-            }
-            let l = label(&details, &["row-note"]);
-            l.set_valign(gtk::Align::Start);
-            grid.attach(&l, 2, r, 1, 1);
-
-            if let Some(after) = g.score_after {
-                let s = label(&score_from_my_side(after, d.row.my_team), &["goal-score"]);
-                s.set_halign(gtk::Align::End);
-                s.set_hexpand(true);
-                s.set_valign(gtk::Align::Start);
-                grid.attach(&s, 3, r, 1, 1);
-            }
+        for g in &d.goals {
+            b.append(&goal_card(d, g, max_speed));
         }
-        b.append(&grid);
     }
 
     fn fill_movement(&self, d: &MatchDetail) {
@@ -503,6 +330,130 @@ impl DetailView {
             }
         }
     }
+}
+
+/// Team colours for the two-part bars: yours in the app's red, the others in grey.
+const MINE: (f64, f64, f64) = (0.64, 0.15, 0.19);
+const THEIRS: (f64, f64, f64) = (0.36, 0.31, 0.31);
+
+/// One player as a card: name, a bar for the score compared to the best score of the match,
+/// and the other numbers in a row.
+fn player_card(p: &PlayerSummary, name: &str, max_score: i64) -> gtk::Box {
+    let card = vbox(10);
+    card.add_css_class("player-card");
+    if p.is_me {
+        card.add_css_class("me");
+    }
+    card.set_margin_top(10);
+
+    let top = gtk::Box::builder().spacing(14).build();
+    top.append(&name_label(
+        name,
+        &["cell", if p.is_me { "cell-me" } else { "cell" }],
+    ));
+    if let Some(left) = p.left {
+        top.append(&label(
+            &format!("left at {}", clock_text(left)),
+            &["row-note"],
+        ));
+    }
+    let score = gtk::Box::builder()
+        .spacing(10)
+        .hexpand(true)
+        .halign(gtk::Align::End)
+        .build();
+    score.append(&label("SCORE", &["tile-key"]));
+    let b = bar(p.score as f64 / max_score as f64);
+    b.set_width_request(120);
+    score.append(&b);
+    score.append(&label(&p.score.to_string(), &["stat-val"]));
+    top.append(&score);
+    card.append(&top);
+
+    let grid = gtk::Grid::builder()
+        .column_spacing(30)
+        .row_spacing(10)
+        .column_homogeneous(true)
+        .build();
+    for (i, (key, value)) in [
+        ("Goals", p.goals),
+        ("Assists", p.assists),
+        ("Saves", p.saves),
+        ("Shots", p.shots),
+        ("Demos", p.demos),
+        ("Touches", p.touches),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let cell = vbox(1);
+        cell.append(&label(&key.to_uppercase(), &["tile-key"]));
+        cell.append(&label(&value.to_string(), &["stat-small"]));
+        grid.attach(&cell, i as i32, 0, 1, 1);
+    }
+    card.append(&grid);
+    card
+}
+
+/// One goal as a card: green edge for yours, red for theirs; the shot speed and the scorer's
+/// boost as bars.
+fn goal_card(d: &MatchDetail, g: &GoalRow, max_speed: f64) -> gtk::Box {
+    let scorer_team = d
+        .players
+        .iter()
+        .find(|p| p.slot == g.scorer)
+        .map(|p| p.team);
+    let mine = scorer_team == Some(d.row.my_team);
+
+    let outer = gtk::Box::builder().spacing(14).build();
+    outer.add_css_class("player-card");
+    outer.set_margin_top(10);
+    outer.append(&stripe(if mine { "win" } else { "loss" }));
+
+    let inner = vbox(12);
+    inner.set_hexpand(true);
+
+    let top = gtk::Box::builder().spacing(16).build();
+    let time = label(&clock_text(g.clock), &["goal-time"]);
+    time.set_valign(gtk::Align::Start);
+    top.append(&time);
+    let who = vbox(1);
+    who.append(&name_label(
+        &player_name(&d.players, g.scorer),
+        &["cell", if mine { "goal-mine" } else { "goal-theirs" }],
+    ));
+    if let Some(a) = g.assister {
+        who.append(&name_label(
+            &format!("assist {}", player_name(&d.players, a)),
+            &["row-note"],
+        ));
+    }
+    top.append(&who);
+    if let Some(after) = g.score_after {
+        let s = label(&score_from_my_side(after, d.row.my_team), &["stat-val"]);
+        s.set_hexpand(true);
+        s.set_halign(gtk::Align::End);
+        top.append(&s);
+    }
+    inner.append(&top);
+
+    let meters = gtk::Box::builder().spacing(28).homogeneous(true).build();
+    meters.append(&meter(
+        "Shot speed",
+        &format!("{:.0} km/h", g.goal_speed),
+        g.goal_speed / max_speed,
+    ));
+    if let Some(boost) = g.scorer_boost {
+        meters.append(&meter(
+            "Scorer's boost",
+            &boost.to_string(),
+            boost as f64 / 100.0,
+        ));
+    }
+    inner.append(&meters);
+
+    outer.append(&inner);
+    outer
 }
 
 /// Your share of your team's ball touches.

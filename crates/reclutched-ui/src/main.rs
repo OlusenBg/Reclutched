@@ -12,6 +12,7 @@ mod settings_dialog;
 mod setup;
 mod splash;
 mod tracking;
+mod widgets;
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -382,6 +383,12 @@ fn activate(application: &adw::Application, args: &Args) {
         match (name, page_step(name)) {
             ("splash", _) => {}
             ("main", _) => app.show_main(),
+            (tab, _) if tab.starts_with("main-") => {
+                app.show_main();
+                if let Some(view) = app.main_view.borrow().as_ref() {
+                    view.show_tab(&tab["main-".len()..]);
+                }
+            }
             ("settings", _) => {
                 app.show_main();
                 app.open_settings();
