@@ -51,6 +51,19 @@ pub enum SettingsError {
     Json(#[from] serde_json::Error),
 }
 
+/// How the app shows live information while you play. Chosen in the setup; nothing uses it yet
+/// (the overlay and the live window do not exist yet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayMode {
+    /// Only the in-game overlay, no other window.
+    Overlay,
+    /// A live stats window instead of an overlay (for people with two screens).
+    TwoScreens,
+    /// Both the overlay and the window.
+    Both,
+}
+
 /// `#[serde(default)]` means a key missing from the file falls back to [`Settings::default`],
 /// so old settings files keep working when we add new switches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,6 +81,12 @@ pub struct Settings {
     pub offline_matches: bool,
     /// Your own player id, remembered after the first tracked match (not a switch).
     pub my_primary_id: Option<String>,
+    /// False until the first-launch setup in the app has been finished.
+    pub setup_complete: bool,
+    /// The Rocket League username typed in the setup.
+    pub username: Option<String>,
+    /// Overlay, two screens or both; chosen in the setup.
+    pub display_mode: Option<DisplayMode>,
 }
 
 impl Default for Settings {
@@ -84,6 +103,9 @@ impl Default for Settings {
             possession: true,
             offline_matches: false,
             my_primary_id: None,
+            setup_complete: false,
+            username: None,
+            display_mode: None,
         }
     }
 }
@@ -187,6 +209,36 @@ mod tests {
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), s);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn setup_fields_default_to_first_launch_and_old_files_still_load() {
+        let s = Settings::default();
+        assert!(!s.setup_complete && s.username.is_none() && s.display_mode.is_none());
+        // A file written before these fields existed.
+        let old: Settings =
+            serde_json::from_str(r#"{ "goals": false, "my_primary_id": "Epic|1|0" }"#).unwrap();
+        assert!(!old.goals && !old.setup_complete && old.username.is_none());
+    }
+
+    #[test]
+    fn display_mode_uses_readable_names_in_the_file() {
+        for (mode, text) in [
+            (DisplayMode::Overlay, "overlay"),
+            (DisplayMode::TwoScreens, "two_screens"),
+            (DisplayMode::Both, "both"),
+        ] {
+            let json = serde_json::to_string(&mode).unwrap();
+            assert_eq!(json, format!("\"{text}\""));
+            assert_eq!(serde_json::from_str::<DisplayMode>(&json).unwrap(), mode);
+        }
+        let s: Settings = serde_json::from_str(
+            r#"{ "setup_complete": true, "username": "Zed", "display_mode": "two_screens" }"#,
+        )
+        .unwrap();
+        assert!(s.setup_complete);
+        assert_eq!(s.username.as_deref(), Some("Zed"));
+        assert_eq!(s.display_mode, Some(DisplayMode::TwoScreens));
     }
 
     #[test]
