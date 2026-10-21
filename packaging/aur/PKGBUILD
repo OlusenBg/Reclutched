@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc='Calm, local stats tracker for Rocket League (GTK4 app and CLI)'
 arch=('x86_64')
 url='https://github.com/OlusenBg/Reclutched'
-license=('MIT')
+license=('GPL-3.0-or-later')
 depends=('gtk4' 'libadwaita')
 makedepends=('cargo' 'git')
 provides=('reclutched')
@@ -39,6 +39,7 @@ package() {
     install -Dm755 target/release/reclutched "$pkgdir/usr/bin/reclutched"
     install -Dm644 packaging/dev.reclutched.Reclutched.desktop \
         "$pkgdir/usr/share/applications/dev.reclutched.Reclutched.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 branding/logo/icon.svg \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/dev.reclutched.Reclutched.svg"
 }

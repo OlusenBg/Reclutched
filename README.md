@@ -106,3 +106,8 @@ Run only one of the app or `reclutched track` at a time.
 | `reclutched-ui` | The GTK4 / libadwaita app |
 
 The logo and its alternatives are in [`branding/`](branding/).
+
+## Licence
+
+Reclutched is free software under the [GNU GPL v3 or later](LICENSE). You can use and change it, and if you
+share a modified version it has to stay open source under the same licence.

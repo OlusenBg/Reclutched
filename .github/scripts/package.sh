@@ -13,7 +13,7 @@ CC_x86_64_unknown_linux_musl=musl-gcc \
 
 rm -rf dist
 mkdir -p "dist/$name"
-cp "target/$target/release/reclutched" README.md "dist/$name/"
+cp "target/$target/release/reclutched" README.md LICENSE "dist/$name/"
 tar -C dist -czf "dist/$name.tar.gz" "$name"
 (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
 rm -rf "dist/$name"

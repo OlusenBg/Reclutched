@@ -8,7 +8,7 @@ default-members = ["crates/reclutched-core", "crates/reclutched-daemon", "crates
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 # Smaller release binary: drop debug symbols.
 [profile.release]
