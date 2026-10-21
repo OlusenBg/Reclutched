@@ -684,3 +684,55 @@ fn a_missing_boost_key_means_zero_boost_but_opponents_are_not_visible() {
     // Both of us at zero... except the mate has 80, so no overlap.
     assert!((m.team_empty_overlap.unwrap() - 0.0).abs() < 1e-9);
 }
+
+#[test]
+fn the_match_end_time_is_when_match_ended_arrived_not_when_you_left() {
+    let mut events = two_v_two(11);
+    events.push(event(
+        "MatchEnded",
+        json!({ "MatchGuid": "G1", "WinnerTeamNum": 0 }),
+    ));
+    events.push(event("MatchDestroyed", guid()));
+    let mut tracker = Tracker::new(Settings::default());
+    let mut done = None;
+    for (i, ev) in events.iter().enumerate() {
+        // Every event gets a later time; MatchEnded is the 7th, MatchDestroyed the 8th.
+        done = tracker.on_event_at(ev, 1_000 + 10 * i as i64).or(done);
+    }
+    let m = done.expect("recorded");
+    assert_eq!(m.ended_at, 1_000 + 10 * 6, "time of MatchEnded");
+    assert!(m.started_at < m.ended_at);
+}
+
+#[test]
+fn new_settings_apply_from_the_next_match_and_keep_my_id() {
+    let mut tracker = Tracker::new(Settings {
+        my_primary_id: Some("Epic|Me|0".into()),
+        ..Settings::default()
+    });
+    // Everything off except the result: no goals even though there is a goal event.
+    tracker.set_settings(Settings {
+        goals: false,
+        ..Settings::default()
+    });
+    let mut events = two_v_two(11);
+    events.push(event(
+        "GoalScored",
+        json!({"MatchGuid": "G1", "GoalSpeed": 80.0, "GoalTime": 10.0,
+               "ImpactLocation": {"X": 0.0, "Y": 5000.0, "Z": 100.0},
+               "Scorer": {"Name": "Me", "Shortcut": 1, "TeamNum": 0},
+               "BallLastTouch": {"Player": {"Name": "Me", "Shortcut": 1, "TeamNum": 0}, "Speed": 90.0}}),
+    ));
+    events.push(event(
+        "MatchEnded",
+        json!({ "MatchGuid": "G1", "WinnerTeamNum": 0 }),
+    ));
+    events.push(event("MatchDestroyed", guid()));
+    let done = events
+        .iter()
+        .find_map(|e| tracker.on_event_at(e, T0))
+        .expect("recorded");
+    assert!(done.goals.is_empty());
+    // The id given at the start survived the settings swap, so "Me" was recognised.
+    assert_eq!(done.players[done.my_slot].name, "Me");
+}

@@ -163,6 +163,16 @@ fn match_detail_reads_back_what_was_saved() {
     assert_eq!(d.movement.len(), m.movement.len());
     assert_eq!(d.touches.len(), m.touches.len());
     assert_eq!(d.event_stats.len(), m.event_stats.len());
+    assert_eq!(d.goals.len(), m.goals.len());
+    assert_eq!(d.stat_events.len(), m.stat_events.len());
+    if let (Some(a), Some(b)) = (d.goals.first(), m.goals.first()) {
+        assert_eq!(
+            (a.scorer, a.assister, a.clock),
+            (b.scorer, b.assister, b.clock)
+        );
+        assert_eq!(a.score_after, b.score_after);
+        assert_eq!(a.scorer_boost, b.scorer_boost);
+    }
     assert_eq!(d.my_possession_pct, m.my_possession_pct);
     // Whole-number storage: speeds come back rounded.
     assert_eq!(d.ball_max_speed, m.ball_max_speed.map(|v| v.round() as i64));

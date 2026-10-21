@@ -319,6 +319,8 @@ mod tests {
                 avg_boost: Some(20.4),
                 avg_speed: Some(1000.0),
             }],
+            goals: vec![],
+            stat_events: vec![],
         };
         let text = format_detail(&d, &PlaylistMap::with_builtin(), false).join("\n");
         assert!(text.starts_with("Match #5  2023-"), "{text}");

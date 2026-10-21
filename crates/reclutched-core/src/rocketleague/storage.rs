@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::tracker::{
-    Clock, EventStat, FinishedMatch, MovementSummary, PlayerSummary, TouchSummary,
+    Clock, EventStat, FinishedMatch, GoalRow, MovementSummary, PlayerSummary, StatEventRow,
+    TouchSummary,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -541,6 +542,10 @@ pub struct MatchDetail {
     pub movement: Vec<MovementSummary>,
     pub touches: Vec<TouchSummary>,
     pub event_stats: Vec<EventStat>,
+    /// Oldest first.
+    pub goals: Vec<GoalRow>,
+    /// Oldest first.
+    pub stat_events: Vec<StatEventRow>,
 }
 
 impl Store {
@@ -722,6 +727,56 @@ impl Store {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
+        let goals = self
+            .conn
+            .prepare(
+                "SELECT remaining, ot, scorer, assister, goal_speed, last_touch_speed, x, y, z,
+                        team0_after, team1_after, scorer_boost, scorer_speed
+                 FROM goals WHERE match_id = ?1 ORDER BY rowid",
+            )?
+            .query_map([id], |r| {
+                let team0: Option<i64> = r.get(9)?;
+                let team1: Option<i64> = r.get(10)?;
+                Ok(GoalRow {
+                    clock: Clock {
+                        remaining: r.get(0)?,
+                        overtime: r.get(1)?,
+                    },
+                    scorer: r.get::<_, i64>(2)? as usize,
+                    assister: r.get::<_, Option<i64>>(3)?.map(|a| a as usize),
+                    goal_speed: r.get::<_, i64>(4)? as f64,
+                    last_touch_speed: r.get::<_, i64>(5)? as f64,
+                    x: r.get::<_, i64>(6)? as f64,
+                    y: r.get::<_, i64>(7)? as f64,
+                    z: r.get::<_, i64>(8)? as f64,
+                    scorer_boost: r.get(11)?,
+                    scorer_speed: r.get::<_, Option<i64>>(12)?.map(|v| v as f64),
+                    score_after: team0.zip(team1).map(|(a, b)| [a, b]),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let stat_events = self
+            .conn
+            .prepare(
+                "SELECT remaining, ot, name, main, secondary, boost, speed
+                 FROM stat_events WHERE match_id = ?1 ORDER BY rowid",
+            )?
+            .query_map([id], |r| {
+                Ok(StatEventRow {
+                    clock: Clock {
+                        remaining: r.get(0)?,
+                        overtime: r.get(1)?,
+                    },
+                    name: r.get(2)?,
+                    main: r.get::<_, i64>(3)? as usize,
+                    secondary: r.get::<_, Option<i64>>(4)?.map(|a| a as usize),
+                    boost: r.get(5)?,
+                    speed: r.get::<_, Option<i64>>(6)?.map(|v| v as f64),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Some(MatchDetail {
             row,
             my_slot: my_slot as usize,
@@ -733,6 +788,8 @@ impl Store {
             movement,
             touches,
             event_stats,
+            goals,
+            stat_events,
         }))
     }
 }

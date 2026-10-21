@@ -234,7 +234,7 @@ impl Tracker {
             }
             other => {
                 if let Some(active) = self.active.as_mut() {
-                    active.on_other(other, &self.settings);
+                    active.on_other(other, &self.settings, now);
                 }
                 None
             }
@@ -245,6 +245,17 @@ impl Tracker {
     pub fn finish_pending(&mut self, now: i64) -> Option<FinishedMatch> {
         let active = self.active.take()?;
         active.finish(&self.settings, now)
+    }
+
+    /// Uses new settings from the next event on (for example after they were changed in the
+    /// app). Your player id is kept even if the new settings don't have it yet.
+    pub fn set_settings(&mut self, mut settings: Settings) {
+        if settings.my_primary_id.is_none() {
+            settings
+                .my_primary_id
+                .clone_from(&self.settings.my_primary_id);
+        }
+        self.settings = settings;
     }
 
     /// Your player id, the first time we learn it. The caller saves it into the settings.
@@ -349,6 +360,8 @@ struct Active {
     /// We loaded a replay from the match history, or are watching someone else.
     dropped: bool,
     winner: Option<i64>,
+    /// Unix time of `MatchEnded`.
+    ended_at: Option<i64>,
     team_goals: [i64; 2],
     players: Vec<PlayerAcc>,
     pending_joins: HashMap<String, Clock>,
@@ -387,6 +400,7 @@ impl Active {
             phase_known: false,
             dropped: false,
             winner: None,
+            ended_at: None,
             team_goals: [0, 0],
             players: Vec::new(),
             pending_joins: HashMap::new(),
@@ -638,7 +652,7 @@ impl Active {
         }
     }
 
-    fn on_other(&mut self, event: &StatsEvent, settings: &Settings) {
+    fn on_other(&mut self, event: &StatsEvent, settings: &Settings, now: i64) {
         match event {
             StatsEvent::ClockUpdatedSeconds(c) => {
                 self.note_guid(c.match_guid.as_deref());
@@ -668,6 +682,8 @@ impl Active {
             StatsEvent::MatchEnded(m) => {
                 self.note_guid(m.match_guid.as_deref());
                 self.winner = Some(m.winner_team_num);
+                // The match really ended now, not when the player later leaves the screen.
+                self.ended_at.get_or_insert(now);
                 self.play_seen = true;
                 self.live = false;
                 self.phase_known = true;
@@ -877,7 +893,7 @@ impl Active {
             playlist_id,
             arena: self.arena,
             started_at: self.started_at,
-            ended_at: now,
+            ended_at: self.ended_at.unwrap_or(now),
             my_slot,
             my_team,
             team_goals: self.team_goals,

@@ -80,7 +80,7 @@ async fn write_loop(
     mut store: Store,
     names: PlaylistMap,
 ) {
-    let mut tracker = Tracker::new(settings.clone());
+    let mut tracker = Tracker::new(settings);
     loop {
         let event = match rx.recv().await {
             Ok(event) => event,
@@ -92,8 +92,20 @@ async fn write_loop(
         };
 
         let finished = tracker.on_event(&event);
+
+        // A new match starts: pick up settings changed in the meantime (for example in the app).
+        // The previous match was already closed above, with the settings it was played under.
+        if matches!(event, StatsEvent::MatchCreated(_)) {
+            match Settings::load(&settings_path) {
+                Ok(fresh) => tracker.set_settings(fresh),
+                Err(err) => tracing::warn!("could not re-read the settings: {err}"),
+            }
+        }
+
         if let Some(id) = tracker.take_learned_id() {
-            let mut saved = settings.clone();
+            // Load the file again before saving, so we only add the id and never overwrite
+            // settings that changed while we were running.
+            let mut saved = Settings::load(&settings_path).unwrap_or_default();
             saved.my_primary_id = Some(id);
             match saved.save(&settings_path) {
                 Ok(()) => println!("Learned your player id and saved it in the settings."),
