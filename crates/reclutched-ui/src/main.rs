@@ -7,10 +7,12 @@ mod detail;
 mod flow;
 mod focus;
 mod format;
+mod keys;
 mod list;
 mod live;
 mod mainview;
 mod overlay;
+mod panel;
 mod settings_dialog;
 mod setup;
 mod splash;
@@ -26,6 +28,7 @@ use adw::prelude::*;
 use clap::Parser;
 use reclutched_core::rocketleague::playlist::default_map_path;
 use reclutched_core::rocketleague::settings::{DisplayMode, Settings};
+use reclutched_core::rocketleague::storage::MovementAverages;
 use reclutched_core::rocketleague::storage::{default_db_path, Store};
 use reclutched_core::rocketleague::tracker::LiveSnapshot;
 use reclutched_daemon::track::{Paths, TrackEvent};
@@ -59,6 +62,9 @@ struct Args {
     /// Developer option: open one page directly (for screenshots).
     #[arg(long, hide = true)]
     page: Option<String>,
+    /// Developer option: act as if the overlay key were held down (for screenshots).
+    #[arg(long, hide = true)]
+    hold_key: bool,
 }
 
 fn parse_size(text: &str) -> Result<(i32, i32), String> {
@@ -100,6 +106,15 @@ struct App {
     /// What the status light shows now; the overlay's pill follows it.
     status: Cell<tracking::Status>,
     ticks: Cell<u32>,
+    /// Watches the overlay key (hold to show the panel); started when the overlay is wanted.
+    keys: RefCell<Option<keys::KeyWatcher>>,
+    key_held: Cell<bool>,
+    key_hint_shown: Cell<bool>,
+    /// The match in progress, for the overlay panel.
+    latest_live: RefCell<Option<LiveSnapshot>>,
+    /// Your usual numbers, loaded when the panel needs them (and again after a match is saved).
+    usual: RefCell<Option<MovementAverages>>,
+    usual_loaded: Cell<bool>,
 }
 
 /// Wraps a page with a flat, empty header bar, so the window can be moved and closed
@@ -243,6 +258,7 @@ impl App {
                     self.set_status(tracking::Status::Waiting);
                 }
                 tracking::Update::Event(TrackEvent::MatchSaved { summary, .. }) => {
+                    self.usual_loaded.set(false);
                     self.toast(&format!("Saved: {summary}"));
                     if let Some(view) = self.main_view.borrow().as_ref() {
                         view.reload();
@@ -255,6 +271,7 @@ impl App {
             }
         }
         if let Some(snapshot) = live_news {
+            *self.latest_live.borrow_mut() = snapshot.as_deref().cloned();
             self.show_live(snapshot);
         }
         // The tracker stopped on its own (for example it could not open the database).
@@ -320,13 +337,12 @@ impl App {
         self.ticks.set(ticks.wrapping_add(1));
         // The mode can change in the settings; look about every two seconds.
         if ticks.is_multiple_of(8) {
-            let mode = Settings::load(&self.settings_path)
-                .ok()
-                .and_then(|s| s.display_mode);
+            let settings = Settings::load(&self.settings_path).unwrap_or_default();
             self.overlay_wanted.set(matches!(
-                mode,
+                settings.display_mode,
                 Some(DisplayMode::Overlay | DisplayMode::Both)
             ));
+            self.sync_key_watcher(&settings.overlay_key);
         }
         if !self.overlay_wanted.get() {
             self.close_overlay();
@@ -360,6 +376,84 @@ impl App {
             self.status.get(),
             self.focus.game_focused(),
         ));
+        self.refresh_panel();
+    }
+
+    /// Starts watching the overlay key (or switches it to another key) and, once, says how to
+    /// get the permission when we are not allowed to read the keyboards.
+    fn sync_key_watcher(self: &Rc<Self>, key: &str) {
+        if !self.overlay_wanted.get() {
+            return;
+        }
+        if self.keys.borrow().is_none() {
+            let Some(watcher) = keys::KeyWatcher::start(key) else {
+                if !self.key_hint_shown.replace(true) {
+                    self.toast(&format!(
+                        "Unknown overlay key \"{key}\"; pick one in the settings."
+                    ));
+                }
+                return;
+            };
+            *self.keys.borrow_mut() = Some(watcher);
+            self.watch_keys();
+        } else if let Some(watcher) = self.keys.borrow().as_ref() {
+            watcher.set_key(key);
+        }
+        let denied = self
+            .keys
+            .borrow()
+            .as_ref()
+            .is_some_and(|k| k.access() == keys::KeyAccess::NoPermission);
+        if denied && !self.key_hint_shown.replace(true) {
+            self.toast(
+                "The overlay key needs permission to read your keyboard: run \"sudo usermod -aG input $USER\", then log out and back in.",
+            );
+        }
+    }
+
+    /// Checks the key about 25 times a second, so the panel follows your finger.
+    fn watch_keys(self: &Rc<Self>) {
+        let app = Rc::downgrade(self);
+        gtk::glib::timeout_add_local(Duration::from_millis(40), move || {
+            let Some(app) = app.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            let events = match app.keys.borrow().as_ref() {
+                Some(keys) => keys.drain(),
+                None => Vec::new(),
+            };
+            // Only the last event counts (a quick tap is a press and a release in one go).
+            if let Some(last) = events.last() {
+                app.key_held.set(*last == keys::KeyEvent::Pressed);
+                app.refresh_panel();
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
+    /// Shows the panel while the key is held and the game has the focus, otherwise hides it.
+    fn refresh_panel(&self) {
+        let overlay = self.overlay.borrow().clone();
+        let Some(overlay) = overlay else { return };
+        let game_here = match self.focus.game_focused() {
+            Some(focused) => focused,
+            // Without focus information: the game being connected is the best sign we have.
+            None => self.status.get() == tracking::Status::Active,
+        };
+        if !(self.key_held.get() && game_here && self.overlay_wanted.get()) {
+            overlay.hide_panel();
+            return;
+        }
+        if !self.usual_loaded.replace(true) {
+            let averages = Store::open(&self.db_path)
+                .ok()
+                .and_then(|store| store.my_movement_averages(30).ok().flatten());
+            *self.usual.borrow_mut() = averages;
+        }
+        overlay.show_panel(
+            self.latest_live.borrow().as_ref(),
+            self.usual.borrow().as_ref(),
+        );
     }
 
     fn close_overlay(&self) {
@@ -500,6 +594,12 @@ fn activate(application: &adw::Application, args: &Args) {
         overlay_wanted: Cell::new(false),
         status: Cell::new(tracking::Status::Off),
         ticks: Cell::new(0),
+        keys: RefCell::new(None),
+        key_held: Cell::new(args.hold_key),
+        key_hint_shown: Cell::new(false),
+        latest_live: RefCell::new(None),
+        usual: RefCell::new(None),
+        usual_loaded: Cell::new(false),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped
     // when this function returns and every button handler would find a wizard that is gone.

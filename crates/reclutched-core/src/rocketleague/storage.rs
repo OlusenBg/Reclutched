@@ -548,7 +548,66 @@ pub struct MatchDetail {
     pub stat_events: Vec<StatEventRow>,
 }
 
+/// How you usually play: your own movement numbers averaged over your recent matches. The
+/// overlay compares a live match against these.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MovementAverages {
+    /// How many matches went into the averages.
+    pub matches: i64,
+    pub avg_boost: f64,
+    pub pct_boost_empty: f64,
+    pub avg_speed: f64,
+    pub pct_supersonic: f64,
+    pub pct_powersliding: f64,
+    pub pct_airborne: f64,
+    pub pct_on_wall: f64,
+}
+
+/// A comparison needs a few matches behind it, or "your average" is just the last match.
+pub const MIN_MATCHES_FOR_AVERAGES: i64 = 3;
+
 impl Store {
+    /// Your own movement averages over your last `last` matches that have movement data, or
+    /// `None` when there are fewer than [`MIN_MATCHES_FOR_AVERAGES`].
+    pub fn my_movement_averages(&self, last: u32) -> Result<Option<MovementAverages>, StoreError> {
+        let row = self.conn.query_row(
+            "SELECT COUNT(*), AVG(pm.avg_boost), AVG(pm.pct_boost_empty), AVG(pm.avg_speed),
+                    AVG(pm.pct_supersonic), AVG(pm.pct_powersliding), AVG(pm.pct_airborne),
+                    AVG(pm.pct_on_wall)
+             FROM player_movement pm
+             JOIN matches m ON m.id = pm.match_id AND m.my_slot = pm.slot
+             WHERE pm.samples >= 100
+               AND pm.match_id IN (SELECT id FROM matches ORDER BY ended_at DESC, id DESC LIMIT ?1)",
+            [last],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, Option<f64>>(1)?,
+                    r.get::<_, Option<f64>>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
+                    r.get::<_, Option<f64>>(4)?,
+                    r.get::<_, Option<f64>>(5)?,
+                    r.get::<_, Option<f64>>(6)?,
+                    r.get::<_, Option<f64>>(7)?,
+                ))
+            },
+        )?;
+        let (matches, boost, empty, speed, sonic, slide, air, wall) = row;
+        if matches < MIN_MATCHES_FOR_AVERAGES {
+            return Ok(None);
+        }
+        Ok(Some(MovementAverages {
+            matches,
+            avg_boost: boost.unwrap_or(0.0),
+            pct_boost_empty: empty.unwrap_or(0.0),
+            avg_speed: speed.unwrap_or(0.0),
+            pct_supersonic: sonic.unwrap_or(0.0),
+            pct_powersliding: slide.unwrap_or(0.0),
+            pct_airborne: air.unwrap_or(0.0),
+            pct_on_wall: wall.unwrap_or(0.0),
+        }))
+    }
+
     /// Newest first.
     pub fn recent_matches(&self, limit: u32) -> Result<Vec<MatchRow>, StoreError> {
         let mut stmt = self.conn.prepare(

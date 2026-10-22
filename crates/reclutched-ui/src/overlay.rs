@@ -1,11 +1,16 @@
 //! The in-game overlay: click-through windows drawn above everything on Wayland (layer-shell).
 //! They never take mouse or keyboard input, so the game keeps working underneath.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
+use reclutched_core::rocketleague::storage::MovementAverages;
+use reclutched_core::rocketleague::tracker::LiveSnapshot;
+
+use crate::panel;
 use crate::tracking::Status;
 
 /// What the little pill in the corner says.
@@ -55,6 +60,10 @@ pub struct Overlay {
     pill: gtk::Window,
     dot: gtk::Label,
     text: gtk::Label,
+    /// The big panel shown while the overlay key is held.
+    panel: gtk::Window,
+    panel_root: gtk::Overlay,
+    panel_pieces: RefCell<Vec<gtk::Widget>>,
 }
 
 /// How see-through the pill is (1.0 = solid).
@@ -113,7 +122,47 @@ impl Overlay {
         pill.set_margin(Edge::Left, 28);
         pill.set_opacity(PILL_OPACITY);
 
-        Some(Rc::new(Self { pill, dot, text }))
+        // The panel covers the whole screen; only its cards are drawn, the rest stays see-through.
+        let panel_root = gtk::Overlay::new();
+        panel_root.set_child(Some(&gtk::Box::new(gtk::Orientation::Horizontal, 0)));
+        let panel = gtk::Window::builder()
+            .application(app)
+            .title("Reclutched overlay panel")
+            .child(&panel_root)
+            .build();
+        make_overlay_layer(&panel);
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            panel.set_anchor(edge, true);
+        }
+        panel.set_exclusive_zone(-1);
+
+        Some(Rc::new(Self {
+            pill,
+            dot,
+            text,
+            panel,
+            panel_root,
+            panel_pieces: RefCell::new(Vec::new()),
+        }))
+    }
+
+    /// Shows (or refreshes) the panel for the match in `snapshot`; `None` means no match is on.
+    pub fn show_panel(&self, snapshot: Option<&LiveSnapshot>, usual: Option<&MovementAverages>) {
+        for old in self.panel_pieces.borrow_mut().drain(..) {
+            self.panel_root.remove_overlay(&old);
+        }
+        let pieces = panel::build(snapshot, usual);
+        for piece in &pieces {
+            self.panel_root.add_overlay(piece);
+        }
+        *self.panel_pieces.borrow_mut() = pieces;
+        if !self.panel.is_visible() {
+            self.panel.present();
+        }
+    }
+
+    pub fn hide_panel(&self) {
+        self.panel.set_visible(false);
     }
 
     /// Shows the pill with this state, or hides it for `None`.
@@ -134,6 +183,7 @@ impl Overlay {
 
     pub fn close(&self) {
         self.pill.destroy();
+        self.panel.destroy();
     }
 }
 

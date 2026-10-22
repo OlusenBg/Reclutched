@@ -242,6 +242,9 @@ pub struct LiveSnapshot {
     /// Share of the time each team last touched the ball so far, in percent.
     pub possession: Option<[f64; 2]>,
     pub ball_speed: f64,
+    /// Your boost and speed habits so far (empty when the movement switch is off or before
+    /// the ball is in play).
+    pub me_movement: Option<MovementSummary>,
     pub feed: Vec<LiveEvent>,
 }
 
@@ -361,6 +364,9 @@ impl Tracker {
                 .collect(),
             possession,
             ball_speed: a.ball_speed_now,
+            me_movement: a
+                .my_slot
+                .and_then(|slot| movement_summary(slot, &a.players[slot].movement)),
             feed: a.feed.iter().cloned().collect(),
         })
     }

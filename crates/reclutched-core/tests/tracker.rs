@@ -800,6 +800,10 @@ fn live_snapshot_shows_the_match_as_it_goes() {
         (me.name.as_str(), me.score, me.boost),
         ("Me", 120, Some(40))
     );
+    // Your habits so far: boost 100, 0 and then 40 four times over six live ticks.
+    let habits = live.me_movement.as_ref().expect("movement is collected");
+    assert_eq!(habits.samples, 6);
+    assert!((habits.avg_boost - 260.0 / 6.0).abs() < 1e-9);
     let foe = live.players.iter().find(|p| p.name == "Foe1").unwrap();
     assert_eq!(foe.boost, None, "no boost for opponents");
 

@@ -181,3 +181,39 @@ fn match_detail_reads_back_what_was_saved() {
         assert_eq!(a.times_demolished, b.times_demolished);
     }
 }
+
+#[test]
+fn my_movement_averages_need_a_few_matches_and_use_only_my_rows() {
+    let mut base = real_match();
+    // The fixture is a few seconds long; a real match has thousands of samples.
+    for m in &mut base.movement {
+        m.samples = 5_000;
+    }
+    let mine = base
+        .movement
+        .iter()
+        .find(|m| m.slot == base.my_slot)
+        .expect("the fixture has movement data for me")
+        .clone();
+    let mut store = Store::open_in_memory().unwrap();
+    for i in 1..=3 {
+        assert_eq!(
+            store.my_movement_averages(20).unwrap(),
+            None,
+            "{} saved matches are too few",
+            i - 1
+        );
+        let mut m = base.clone();
+        m.guid = Some(format!("guid-{i}"));
+        m.ended_at += i;
+        store.save_match(&m).unwrap().expect("a new match");
+    }
+    // Only the samples of my own row count (the fixture's other players have movement rows too).
+    let avg = store
+        .my_movement_averages(20)
+        .unwrap()
+        .expect("three matches");
+    assert_eq!(avg.matches, 3);
+    assert!((avg.avg_boost - mine.avg_boost).abs() < 1e-9);
+    assert!((avg.pct_supersonic - mine.pct_supersonic).abs() < 1e-9);
+}

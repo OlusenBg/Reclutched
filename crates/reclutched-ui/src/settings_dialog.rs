@@ -9,6 +9,7 @@ use reclutched_core::rocketleague::settings::{DisplayMode, Settings};
 use reclutched_core::rocketleague::statsapi;
 
 use crate::flow::{username_error, ADV_EVENTS, ADV_HABITS, ADV_MATCHES};
+use crate::keys;
 use crate::setup::{switch_subtitle, switch_title};
 
 const MODES: [(DisplayMode, &str); 3] = [
@@ -109,7 +110,7 @@ pub fn open(
 
     let mode_row = adw::ComboRow::builder()
         .title("Display mode")
-        .subtitle("Overlay and live window are coming; your choice is saved")
+        .subtitle("Overlay: an in-game panel while you hold a key. 2 Screens: a live window for another screen.")
         .model(&gtk::StringList::new(&MODES.map(|(_, name)| name)))
         .build();
     mode_row.set_selected(
@@ -131,6 +132,34 @@ pub fn open(
         });
     }
     profile.add(&mode_row);
+
+    // The key you hold to show the overlay panel.
+    let key_row = adw::ComboRow::builder()
+        .title("Overlay key (hold to show)")
+        .subtitle("Needs permission to read your keyboard: sudo usermod -aG input $USER, then log out and in")
+        .model(&gtk::StringList::new(
+            &keys::KEYS.iter().map(|&(name, _)| name).collect::<Vec<_>>(),
+        ))
+        .build();
+    key_row.set_selected(
+        keys::KEYS
+            .iter()
+            .position(|&(name, _)| name.eq_ignore_ascii_case(&current.overlay_key))
+            .unwrap_or(0) as u32,
+    );
+    {
+        let path = path.clone();
+        let on_error = on_error.clone();
+        key_row.connect_selected_notify(move |row| {
+            let Some(&(name, _)) = keys::KEYS.get(row.selected() as usize) else {
+                return;
+            };
+            if let Err(e) = update(&path, |s| s.overlay_key = name.to_string()) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    profile.add(&key_row);
     page.add(&profile);
 
     // --- Rocket League: where it is, and whether its Stats API is on ---
