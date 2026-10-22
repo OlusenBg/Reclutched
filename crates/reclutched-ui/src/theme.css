@@ -14,6 +14,30 @@
 
 window { background: #141111; }
 
+/* Solid whatever the user's GTK theme says. Containers inside our windows are transparent and
+   only two surfaces carry a colour, both with extra specificity (repeated classes) so a themed
+   ~/.config/gtk-4.0/gtk.css cannot turn them see-through or navy. */
+window.rc-window.rc-window { background: #141111; background-color: #141111; }
+window.rc-window.rc-window stack,
+window.rc-window.rc-window scrolledwindow,
+window.rc-window.rc-window viewport,
+window.rc-window.rc-window toolbarview,
+window.rc-window.rc-window headerbar,
+window.rc-window.rc-window navigation-view,
+window.rc-window.rc-window navigation-split-view,
+window.rc-window.rc-window clamp,
+window.rc-window.rc-window statuspage,
+window.rc-window.rc-window navigation-page,
+window.rc-window.rc-window .content-pane,
+window.rc-window.rc-window .background,
+window.rc-window.rc-window .view {
+    background: transparent;
+    background-color: transparent;
+}
+window.rc-window.rc-window .sidebar-pane,
+window.rc-window.rc-window .navigation-sidebar,
+window.rc-window.rc-window list.match-list { background: #181414; background-color: #181414; }
+
 /* ---------- splash ---------- */
 .wordmark { font-size: 30px; font-weight: 300; letter-spacing: 0.4em; color: #e9e3e1; }
 .tagline { font-size: 12px; color: #8b817e; letter-spacing: 0.08em; }

@@ -565,6 +565,7 @@ fn activate(application: &adw::Application, args: &Args) {
     let window = adw::ApplicationWindow::builder()
         .application(application)
         .title("Reclutched")
+        .css_classes(["rc-window"])
         .default_width(args.size.map_or(1100, |s| s.0))
         .default_height(args.size.map_or(700, |s| s.1))
         .width_request(700)

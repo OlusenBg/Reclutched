@@ -69,6 +69,7 @@ impl LiveWindow {
         let window = adw::ApplicationWindow::builder()
             .application(app)
             .title("Reclutched \u{2013} Live")
+            .css_classes(["rc-window"])
             .default_width(560)
             .default_height(880)
             .width_request(380)

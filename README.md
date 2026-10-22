@@ -92,8 +92,19 @@ is not recognised, add a word from its class or title to `game_window_hints` in
 ### Solid window on Hyprland
 
 Hyprland draws every window at `decoration:active_opacity` (HyDE sets 0.9, and 0.75 for inactive windows), so
-the app can look see-through and washed out. An app cannot opt out of this; add a rule once. On Hyprland 0.55+
-with the Lua config (`~/.config/hypr/hyprland.lua`):
+the app can look see-through and washed out. An app cannot opt out of this itself. Two ways to fix it:
+
+**1. Make all windows solid.** This is the quick one, and it worked on Hyprland 0.56 with the Lua config. It may be
+reset when Hyprland reloads its config, so put the same two values in your config to keep them:
+
+```bash
+hyprctl eval 'hl.config({ decoration = { active_opacity = 1.0, inactive_opacity = 1.0 } })'
+```
+
+On older versions: `hyprctl keyword decoration:active_opacity 1.0` (and the same for `inactive_opacity`).
+
+**2. Make only Reclutched solid** with a window rule, once. On Hyprland 0.55+ with the Lua config
+(`~/.config/hypr/hyprland.lua`):
 
 ```lua
 hl.window_rule({
@@ -110,7 +121,7 @@ windowrule = opaque, class:^(dev.reclutched.Reclutched)$
 ```
 
 Settings shows the Lua line with a copy button when it runs under Hyprland. The in-game overlay is transparent
-on purpose and is not affected.
+on purpose and is not affected. The app also stays dark and solid under themed `~/.config/gtk-4.0/gtk.css` files.
 
 ### Turn on the Stats API
 
