@@ -70,6 +70,56 @@ fn statsapi_summary(config_dir: Option<&Path>) -> (String, bool) {
 /// Called with the code of the controller button that was pressed (`None`: nothing in time).
 pub type PadCallback = Box<dyn Fn(Option<u16>)>;
 
+/// One section of the settings: a heading and groups, next to the sidebar and left-aligned.
+struct SectionPage {
+    scroller: gtk::ScrolledWindow,
+    column: gtk::Box,
+}
+
+impl SectionPage {
+    fn new(title: &str) -> Self {
+        let column = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .halign(gtk::Align::Start)
+            .margin_top(30)
+            .margin_bottom(36)
+            .margin_start(40)
+            .margin_end(40)
+            .build();
+        // An invisible line of spaces gives the section its preferred width (so the groups stay
+        // at a comfortable width and sit against the sidebar), but, being ellipsized, it can
+        // shrink when the window is narrow. The visible heading is drawn on top of it.
+        let ruler = gtk::Label::builder()
+            .label("\u{00A0}".repeat(90))
+            .css_classes(["settings-title", "settings-ruler"])
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .build();
+        let heading = gtk::Overlay::builder()
+            .child(&ruler)
+            .margin_bottom(22)
+            .build();
+        heading.add_overlay(
+            &gtk::Label::builder()
+                .label(title)
+                .css_classes(["settings-title"])
+                .halign(gtk::Align::Start)
+                .build(),
+        );
+        column.append(&heading);
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&column)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vexpand(true)
+            .build();
+        Self { scroller, column }
+    }
+
+    fn add(&self, group: &impl IsA<gtk::Widget>) {
+        group.set_margin_bottom(26);
+        self.column.append(group);
+    }
+}
+
 /// What the page needs from the app around it.
 pub struct Hooks {
     /// The back arrow.
@@ -93,12 +143,18 @@ pub fn build(
     settings_path: PathBuf,
     db_path: PathBuf,
     hooks: Hooks,
+    section: Option<&str>,
 ) -> gtk::Widget {
     let current = Settings::load(&settings_path).unwrap_or_default();
     let path = Rc::new(settings_path);
     let on_error = hooks.toast.clone();
 
-    let page = adw::PreferencesPage::new();
+    // One page per section; the sidebar on the left switches between them.
+    let general_page = SectionPage::new("General");
+    let overlay_page = SectionPage::new("Overlay");
+    let game_page = SectionPage::new("Rocket League");
+    let track_page = SectionPage::new("What to track");
+    let data_page = SectionPage::new("Your data");
 
     // --- profile and mode ---
     let profile = adw::PreferencesGroup::builder().title("Profile").build();
@@ -148,13 +204,13 @@ pub fn build(
     }
     profile.add(&mode_row);
 
-    page.add(&profile);
+    general_page.add(&profile);
     let (overlay_group, key_controller) = overlay_group(&path, &current, &on_error, &hooks);
-    page.add(&overlay_group);
+    overlay_page.add(&overlay_group);
 
     // --- Rocket League: where it is, and whether its Stats API is on ---
     let game = adw::PreferencesGroup::builder()
-        .title("Rocket League")
+        .title("Game folder and Stats API")
         .description("The game only shares your stats when its Stats API is on. Restart the game after changing it.")
         .build();
     let folder_row = adw::ActionRow::builder()
@@ -182,7 +238,7 @@ pub fn build(
     api_row.add_suffix(&on_button);
     game.add(&folder_row);
     game.add(&api_row);
-    page.add(&game);
+    game_page.add(&game);
 
     // Shows the saved folder and the Stats API state.
     let refresh = {
@@ -293,7 +349,7 @@ pub fn build(
         });
     }
     tracking.add(&auto_row);
-    page.add(&tracking);
+    track_page.add(&tracking);
 
     // --- the tracking switches, in the same three groups as the Advanced setup ---
     let groups: [(&str, &[&str]); 3] = [
@@ -325,7 +381,7 @@ pub fn build(
             });
             group.add(&row);
         }
-        page.add(&group);
+        track_page.add(&group);
     }
 
     // --- Hyprland draws every window at active_opacity (0.9 in HyDE); a rule makes this one solid ---
@@ -350,11 +406,11 @@ pub fn build(
         copy.connect_clicked(|button| button.clipboard().set_text(HYPRLAND_OPAQUE_RULE));
         rule_row.add_suffix(&copy);
         window.add(&rule_row);
-        page.add(&window);
+        general_page.add(&window);
     }
 
     // --- where things live, and the way back to the setup ---
-    let data = adw::PreferencesGroup::builder().title("Your data").build();
+    let data = adw::PreferencesGroup::builder().title("Files").build();
     for (title, value) in [
         ("Match database", db_path.display().to_string()),
         ("Settings file", path.display().to_string()),
@@ -374,7 +430,7 @@ pub fn build(
         .build();
     rerun.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     data.add(&rerun);
-    page.add(&data);
+    data_page.add(&data);
 
     {
         let on_setup = hooks.on_setup.clone();
@@ -392,9 +448,57 @@ pub fn build(
     }
     header.pack_start(&back);
     header.set_title_widget(Some(&adw::WindowTitle::new("Settings", "")));
+    let sections: [(&str, &str, &SectionPage); 5] = [
+        ("general", "General", &general_page),
+        ("overlay", "Overlay", &overlay_page),
+        ("game", "Rocket League", &game_page),
+        ("track", "What to track", &track_page),
+        ("data", "Your data", &data_page),
+    ];
+    let stack = gtk::Stack::builder()
+        .transition_type(gtk::StackTransitionType::Crossfade)
+        .transition_duration(120)
+        .hexpand(true)
+        .build();
+    let nav = gtk::ListBox::builder()
+        .selection_mode(gtk::SelectionMode::Single)
+        .css_classes(["settings-nav"])
+        .build();
+    for (id, title, section) in &sections {
+        stack.add_named(&section.scroller, Some(id));
+        nav.append(
+            &gtk::Label::builder()
+                .label(*title)
+                .halign(gtk::Align::Start)
+                .build(),
+        );
+    }
+    {
+        let stack = stack.clone();
+        let ids: Vec<&str> = sections.iter().map(|(id, _, _)| *id).collect();
+        nav.connect_row_selected(move |_, row| {
+            if let Some(id) = row.and_then(|r| ids.get(r.index() as usize)) {
+                stack.set_visible_child_name(id);
+            }
+        });
+    }
+    let first = section
+        .and_then(|wanted| sections.iter().position(|(id, _, _)| *id == wanted))
+        .unwrap_or(0);
+    nav.select_row(nav.row_at_index(first as i32).as_ref());
+    let sidebar = gtk::ScrolledWindow::builder()
+        .child(&nav)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .width_request(230)
+        .build();
+    let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    body.append(&sidebar);
+    body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+    body.append(&stack);
+
     let view = adw::ToolbarView::new();
     view.add_top_bar(&header);
-    view.set_content(Some(&page));
+    view.set_content(Some(&body));
     view.add_controller(key_controller);
     view.upcast()
 }
@@ -409,7 +513,7 @@ fn overlay_group(
     hooks: &Hooks,
 ) -> (adw::PreferencesGroup, gtk::EventControllerKey) {
     let group = adw::PreferencesGroup::builder()
-        .title("Overlay")
+        .title("Hold to show")
         .description("Hold the key or the button to show the overlay in the game (Overlay and Both modes). Set one or both; either works. Reading them needs permission: sudo usermod -aG input $USER, then log out and in.")
         .build();
 

@@ -36,7 +36,8 @@ window.rc-window.rc-window .view {
 }
 window.rc-window.rc-window .sidebar-pane,
 window.rc-window.rc-window .navigation-sidebar,
-window.rc-window.rc-window list.match-list { background: #181414; background-color: #181414; }
+window.rc-window.rc-window list.match-list,
+window.rc-window.rc-window list.settings-nav { background: #181414; background-color: #181414; }
 
 /* ---------- splash ---------- */
 .wordmark { font-size: 30px; font-weight: 300; letter-spacing: 0.4em; color: #e9e3e1; }
@@ -240,3 +241,18 @@ window.overlay-window, window.overlay-window > * { background: transparent; box-
 .overlay-name { font-size: 14px; color: #cfc7c5; }
 .overlay-name.me { color: #ffffff; font-weight: 600; }
 .overlay-name.dim { color: #6f6563; }
+
+/* ---------- settings sections ---------- */
+list.settings-nav { padding: 14px 10px; }
+list.settings-nav > row {
+    background: transparent;
+    border-radius: 10px;
+    padding: 11px 14px;
+    margin-bottom: 2px;
+    color: #b3a9a6;
+    font-size: 14px;
+}
+list.settings-nav > row:hover { background: #1f1919; color: #e9e3e1; }
+list.settings-nav > row:selected { background: rgba(163, 38, 48, 0.16); color: #ffffff; }
+.settings-title { font-size: 26px; font-weight: 300; color: #e9e3e1; }
+.settings-ruler { opacity: 0; }

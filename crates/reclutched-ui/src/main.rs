@@ -547,6 +547,11 @@ impl App {
 
     /// Shows the settings as a page inside the window (the back arrow returns to your matches).
     fn open_settings(self: &Rc<Self>) {
+        self.open_settings_at(None);
+    }
+
+    /// Same, with one section selected (`None`: the first).
+    fn open_settings_at(self: &Rc<Self>, section: Option<&str>) {
         let weak = Rc::downgrade(self);
         let hooks = settings_page::Hooks {
             on_back: {
@@ -597,6 +602,7 @@ impl App {
             self.settings_path.clone(),
             self.db_path.clone(),
             hooks,
+            section,
         );
         self.set_page("settings", &page);
         self.pages.set_visible_child_name("settings");
@@ -763,6 +769,10 @@ fn activate(application: &adw::Application, args: &Args) {
             ("settings", _) => {
                 app.show_main();
                 app.open_settings();
+            }
+            (section, _) if section.starts_with("settings-") => {
+                app.show_main();
+                app.open_settings_at(Some(&section["settings-".len()..]));
             }
             (_, Some(step)) => app.show_setup(Some(step)),
             _ => eprintln!("unknown page '{name}'"),
