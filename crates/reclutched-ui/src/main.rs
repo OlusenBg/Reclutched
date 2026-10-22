@@ -13,7 +13,7 @@ mod live;
 mod mainview;
 mod overlay;
 mod panel;
-mod settings_dialog;
+mod settings_page;
 mod setup;
 mod splash;
 mod tracking;
@@ -109,7 +109,13 @@ struct App {
     /// Watches the overlay key (hold to show the panel); started when the overlay is wanted.
     keys: RefCell<Option<keys::KeyWatcher>>,
     key_held: Cell<bool>,
+    /// The controller button is held (either one shows the overlay).
+    pad_held: Cell<bool>,
     key_hint_shown: Cell<bool>,
+    /// Waiting for a controller button press from the settings page.
+    capture_cb: RefCell<Option<settings_page::PadCallback>>,
+    capture_gen: Cell<u32>,
+    keys_timer_started: Cell<bool>,
     /// The match in progress, for the overlay panel.
     latest_live: RefCell<Option<LiveSnapshot>>,
     /// Your usual numbers, loaded when the panel needs them (and again after a match is saved).
@@ -342,7 +348,7 @@ impl App {
                 settings.display_mode,
                 Some(DisplayMode::Overlay | DisplayMode::Both)
             ));
-            self.sync_key_watcher(&settings.overlay_key);
+            self.sync_key_watcher(&settings);
         }
         if !self.overlay_wanted.get() {
             self.close_overlay();
@@ -379,25 +385,29 @@ impl App {
         self.refresh_panel();
     }
 
-    /// Starts watching the overlay key (or switches it to another key) and, once, says how to
-    /// get the permission when we are not allowed to read the keyboards.
-    fn sync_key_watcher(self: &Rc<Self>, key: &str) {
+    /// Makes sure the key and controller watcher runs (and its 25-times-a-second check).
+    fn ensure_key_watcher(self: &Rc<Self>) {
+        if self.keys.borrow().is_none() {
+            let settings = Settings::load(&self.settings_path).unwrap_or_default();
+            *self.keys.borrow_mut() = Some(keys::KeyWatcher::start(
+                &settings.overlay_key,
+                &settings.overlay_button,
+            ));
+        }
+        if !self.keys_timer_started.replace(true) {
+            self.watch_keys();
+        }
+    }
+
+    /// Follows the saved key and button, and, once, says how to get the permission when we are
+    /// not allowed to read the devices.
+    fn sync_key_watcher(self: &Rc<Self>, settings: &Settings) {
         if !self.overlay_wanted.get() {
             return;
         }
-        if self.keys.borrow().is_none() {
-            let Some(watcher) = keys::KeyWatcher::start(key) else {
-                if !self.key_hint_shown.replace(true) {
-                    self.toast(&format!(
-                        "Unknown overlay key \"{key}\"; pick one in the settings."
-                    ));
-                }
-                return;
-            };
-            *self.keys.borrow_mut() = Some(watcher);
-            self.watch_keys();
-        } else if let Some(watcher) = self.keys.borrow().as_ref() {
-            watcher.set_key(key);
+        self.ensure_key_watcher();
+        if let Some(watcher) = self.keys.borrow().as_ref() {
+            watcher.set_bindings(&settings.overlay_key, &settings.overlay_button);
         }
         let denied = self
             .keys
@@ -406,12 +416,12 @@ impl App {
             .is_some_and(|k| k.access() == keys::KeyAccess::NoPermission);
         if denied && !self.key_hint_shown.replace(true) {
             self.toast(
-                "The overlay key needs permission to read your keyboard: run \"sudo usermod -aG input $USER\", then log out and back in.",
+                "The overlay key and controller button need permission to read your devices: run \"sudo usermod -aG input $USER\", then log out and back in.",
             );
         }
     }
 
-    /// Checks the key about 25 times a second, so the panel follows your finger.
+    /// Checks the key and the controller about 25 times a second, so the panel follows your finger.
     fn watch_keys(self: &Rc<Self>) {
         let app = Rc::downgrade(self);
         gtk::glib::timeout_add_local(Duration::from_millis(40), move || {
@@ -422,13 +432,68 @@ impl App {
                 Some(keys) => keys.drain(),
                 None => Vec::new(),
             };
-            // Only the last event counts (a quick tap is a press and a release in one go).
-            if let Some(last) = events.last() {
-                app.key_held.set(*last == keys::KeyEvent::Pressed);
+            let mut changed = false;
+            for event in events {
+                match event {
+                    keys::KeyEvent::Pressed(keys::Source::Keyboard) => app.key_held.set(true),
+                    keys::KeyEvent::Released(keys::Source::Keyboard) => app.key_held.set(false),
+                    keys::KeyEvent::Pressed(keys::Source::Controller) => app.pad_held.set(true),
+                    keys::KeyEvent::Released(keys::Source::Controller) => app.pad_held.set(false),
+                    keys::KeyEvent::Captured(code) => {
+                        let done = app.capture_cb.borrow_mut().take();
+                        if let Some(done) = done {
+                            done(Some(code));
+                        }
+                    }
+                }
+                changed = true;
+            }
+            if changed {
                 app.refresh_panel();
             }
             gtk::glib::ControlFlow::Continue
         });
+    }
+
+    /// For the settings page: listens for the next controller button (up to 12 seconds).
+    fn capture_pad(self: &Rc<Self>, done: settings_page::PadCallback) {
+        self.ensure_key_watcher();
+        *self.capture_cb.borrow_mut() = Some(done);
+        if let Some(watcher) = self.keys.borrow().as_ref() {
+            watcher.capture_button();
+        }
+        let generation = self.capture_gen.get().wrapping_add(1);
+        self.capture_gen.set(generation);
+        let app = Rc::downgrade(self);
+        gtk::glib::timeout_add_local_once(Duration::from_secs(12), move || {
+            let Some(app) = app.upgrade() else { return };
+            if app.capture_gen.get() != generation {
+                return;
+            }
+            let done = app.capture_cb.borrow_mut().take();
+            if let Some(done) = done {
+                if let Some(watcher) = app.keys.borrow().as_ref() {
+                    watcher.cancel_capture();
+                }
+                done(None);
+            }
+        });
+    }
+
+    fn cancel_pad_capture(&self) {
+        self.capture_gen.set(self.capture_gen.get().wrapping_add(1));
+        self.capture_cb.borrow_mut().take();
+        if let Some(watcher) = self.keys.borrow().as_ref() {
+            watcher.cancel_capture();
+        }
+    }
+
+    /// The devices we read right now, when the watcher runs.
+    fn key_devices(&self) -> Option<(keys::Devices, keys::KeyAccess)> {
+        self.keys
+            .borrow()
+            .as_ref()
+            .map(|watcher| (watcher.devices(), watcher.access()))
     }
 
     /// Shows the panel while the key is held and the game has the focus, otherwise hides it.
@@ -440,7 +505,8 @@ impl App {
             // Without focus information: the game being connected is the best sign we have.
             None => self.status.get() == tracking::Status::Active,
         };
-        if !(self.key_held.get() && game_here && self.overlay_wanted.get()) {
+        let held = self.key_held.get() || self.pad_held.get();
+        if !(held && game_here && self.overlay_wanted.get()) {
             overlay.hide_panel();
             return;
         }
@@ -471,18 +537,61 @@ impl App {
         }
     }
 
+    /// Shows the settings as a page inside the window (the back arrow returns to your matches).
     fn open_settings(self: &Rc<Self>) {
-        let again = Rc::downgrade(self);
-        settings_dialog::open(
+        let weak = Rc::downgrade(self);
+        let hooks = settings_page::Hooks {
+            on_back: {
+                let weak = weak.clone();
+                Rc::new(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.cancel_pad_capture();
+                        app.pages.set_visible_child_name("main");
+                    }
+                })
+            },
+            on_setup: {
+                let weak = weak.clone();
+                Rc::new(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.show_setup(None);
+                    }
+                })
+            },
+            toast: {
+                let weak = weak.clone();
+                Rc::new(move |message: &str| {
+                    if let Some(app) = weak.upgrade() {
+                        app.toast(message);
+                    }
+                })
+            },
+            capture_button: {
+                let weak = weak.clone();
+                Rc::new(move |done| {
+                    if let Some(app) = weak.upgrade() {
+                        app.capture_pad(done);
+                    }
+                })
+            },
+            cancel_capture: {
+                let weak = weak.clone();
+                Rc::new(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.cancel_pad_capture();
+                    }
+                })
+            },
+            devices: Rc::new(move || weak.upgrade().and_then(|app| app.key_devices())),
+        };
+        let page = settings_page::build(
             &self.window,
             self.settings_path.clone(),
             self.db_path.clone(),
-            move || {
-                if let Some(app) = again.upgrade() {
-                    app.show_setup(None);
-                }
-            },
+            hooks,
         );
+        self.set_page("settings", &page);
+        self.pages.set_visible_child_name("settings");
     }
 
     /// Starts the setup from the settings that are saved now. `jump` opens a later step directly.
@@ -599,7 +708,11 @@ fn activate(application: &adw::Application, args: &Args) {
         ticks: Cell::new(0),
         keys: RefCell::new(None),
         key_held: Cell::new(args.hold_key),
+        pad_held: Cell::new(false),
         key_hint_shown: Cell::new(false),
+        capture_cb: RefCell::new(None),
+        capture_gen: Cell::new(0),
+        keys_timer_started: Cell::new(false),
         latest_live: RefCell::new(None),
         usual: RefCell::new(None),
         usual_loaded: Cell::new(false),

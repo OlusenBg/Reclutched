@@ -1,6 +1,7 @@
 //! The settings page: a profile, the display mode and every tracking switch.
 //! Changes are saved as soon as you make them.
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -66,26 +67,36 @@ fn statsapi_summary(config_dir: Option<&Path>) -> (String, bool) {
     }
 }
 
-/// Opens the dialog over `parent`. `on_setup` runs when "Run setup again" is pressed.
-/// Messages (saved, could not save, ...) appear inside the dialog itself, because the main
-/// window's own toasts would be hidden behind it.
-pub fn open(
+/// Called with the code of the controller button that was pressed (`None`: nothing in time).
+pub type PadCallback = Box<dyn Fn(Option<u16>)>;
+
+/// What the page needs from the app around it.
+pub struct Hooks {
+    /// The back arrow.
+    pub on_back: Rc<dyn Fn()>,
+    /// "Run the setup again".
+    pub on_setup: Rc<dyn Fn()>,
+    /// Shows a short message (saved, could not save, ...).
+    pub toast: Rc<dyn Fn(&str)>,
+    /// Listens for the next controller button and calls back with its code (`None` when nothing
+    /// was pressed in time).
+    pub capture_button: Rc<dyn Fn(PadCallback)>,
+    pub cancel_capture: Rc<dyn Fn()>,
+    /// The keyboards and controllers we read right now, when the watcher runs.
+    pub devices: Rc<dyn Fn() -> Option<(keys::Devices, keys::KeyAccess)>>,
+}
+
+/// Builds the settings page. It is shown inside the main window with a back arrow, and changes
+/// are saved as soon as you make them.
+pub fn build(
     parent: &adw::ApplicationWindow,
     settings_path: PathBuf,
     db_path: PathBuf,
-    on_setup: impl Fn() + 'static,
-) {
+    hooks: Hooks,
+) -> gtk::Widget {
     let current = Settings::load(&settings_path).unwrap_or_default();
     let path = Rc::new(settings_path);
-    let dialog = adw::PreferencesDialog::builder()
-        .title("Settings")
-        .content_width(560)
-        .content_height(640)
-        .build();
-    let on_error: Rc<dyn Fn(&str)> = {
-        let dialog = dialog.clone();
-        Rc::new(move |message| dialog.add_toast(adw::Toast::new(message)))
-    };
+    let on_error = hooks.toast.clone();
 
     let page = adw::PreferencesPage::new();
 
@@ -114,7 +125,7 @@ pub fn open(
 
     let mode_row = adw::ComboRow::builder()
         .title("Display mode")
-        .subtitle("Overlay: an in-game panel while you hold a key. 2 Screens: a live window for another screen.")
+        .subtitle("Overlay: in-game panel. 2 Screens: live window.")
         .model(&gtk::StringList::new(&MODES.map(|(_, name)| name)))
         .build();
     mode_row.set_selected(
@@ -137,34 +148,9 @@ pub fn open(
     }
     profile.add(&mode_row);
 
-    // The key you hold to show the overlay panel.
-    let key_row = adw::ComboRow::builder()
-        .title("Overlay key (hold to show)")
-        .subtitle("Needs permission to read your keyboard: sudo usermod -aG input $USER, then log out and in")
-        .model(&gtk::StringList::new(
-            &keys::KEYS.iter().map(|&(name, _)| name).collect::<Vec<_>>(),
-        ))
-        .build();
-    key_row.set_selected(
-        keys::KEYS
-            .iter()
-            .position(|&(name, _)| name.eq_ignore_ascii_case(&current.overlay_key))
-            .unwrap_or(0) as u32,
-    );
-    {
-        let path = path.clone();
-        let on_error = on_error.clone();
-        key_row.connect_selected_notify(move |row| {
-            let Some(&(name, _)) = keys::KEYS.get(row.selected() as usize) else {
-                return;
-            };
-            if let Err(e) = update(&path, |s| s.overlay_key = name.to_string()) {
-                on_error(&format!("Could not save: {e}"));
-            }
-        });
-    }
-    profile.add(&key_row);
     page.add(&profile);
+    let (overlay_group, key_controller) = overlay_group(&path, &current, &on_error, &hooks);
+    page.add(&overlay_group);
 
     // --- Rocket League: where it is, and whether its Stats API is on ---
     let game = adw::PreferencesGroup::builder()
@@ -390,13 +376,217 @@ pub fn open(
     data.add(&rerun);
     page.add(&data);
 
-    dialog.add(&page);
     {
-        let dialog = dialog.clone();
-        rerun.connect_activated(move |_| {
-            dialog.close();
-            on_setup();
+        let on_setup = hooks.on_setup.clone();
+        rerun.connect_activated(move |_| on_setup());
+    }
+
+    let header = adw::HeaderBar::new();
+    let back = gtk::Button::builder()
+        .icon_name("go-previous-symbolic")
+        .tooltip_text("Back to your matches")
+        .build();
+    {
+        let on_back = hooks.on_back.clone();
+        back.connect_clicked(move |_| on_back());
+    }
+    header.pack_start(&back);
+    header.set_title_widget(Some(&adw::WindowTitle::new("Settings", "")));
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&header);
+    view.set_content(Some(&page));
+    view.add_controller(key_controller);
+    view.upcast()
+}
+
+/// The two ways to hold the overlay: a keyboard key and a controller button. Both can be set;
+/// either one works. Returns the group and the key controller that must be added to the page
+/// (it catches the next key press while you are setting the key).
+fn overlay_group(
+    path: &Rc<PathBuf>,
+    current: &Settings,
+    on_error: &Rc<dyn Fn(&str)>,
+    hooks: &Hooks,
+) -> (adw::PreferencesGroup, gtk::EventControllerKey) {
+    let group = adw::PreferencesGroup::builder()
+        .title("Overlay")
+        .description("Hold the key or the button to show the overlay in the game (Overlay and Both modes). Set one or both; either works. Reading them needs permission: sudo usermod -aG input $USER, then log out and in.")
+        .build();
+
+    // --- the keyboard key ---
+    let key_row = adw::ActionRow::builder()
+        .title("Keyboard key")
+        .subtitle(keys::key_label(&current.overlay_key))
+        .build();
+    let key_change = gtk::Button::builder()
+        .label("Change")
+        .valign(gtk::Align::Center)
+        .build();
+    let key_clear = gtk::Button::builder()
+        .label("Clear")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    key_row.add_suffix(&key_change);
+    key_row.add_suffix(&key_clear);
+    group.add(&key_row);
+
+    let key_listening = Rc::new(Cell::new(false));
+    {
+        let (key_listening, key_row, key_change) =
+            (key_listening.clone(), key_row.clone(), key_change.clone());
+        let path = path.clone();
+        key_change.clone().connect_clicked(move |_| {
+            if key_listening.get() {
+                // Pressed again: stop listening.
+                key_listening.set(false);
+                key_change.set_label("Change");
+                key_row.set_subtitle(&keys::key_label(&saved_key(&path)));
+            } else {
+                key_listening.set(true);
+                key_change.set_label("Cancel");
+                key_row.set_subtitle("Press the key you want\u{2026}");
+            }
         });
     }
-    dialog.present(Some(parent));
+    {
+        let (path, key_row, on_error) = (path.clone(), key_row.clone(), on_error.clone());
+        key_clear.connect_clicked(move |_| {
+            match update(&path, |s| s.overlay_key = String::new()) {
+                Ok(()) => key_row.set_subtitle(&keys::key_label("")),
+                Err(e) => on_error(&format!("Could not save: {e}")),
+            }
+        });
+    }
+    let controller = gtk::EventControllerKey::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let (key_listening, key_row, key_change) =
+            (key_listening.clone(), key_row.clone(), key_change.clone());
+        let (path, on_error) = (path.clone(), on_error.clone());
+        controller.connect_key_pressed(move |_, _keyval, keycode, _state| {
+            if !key_listening.get() {
+                return gtk::glib::Propagation::Proceed;
+            }
+            key_listening.set(false);
+            key_change.set_label("Change");
+            let Some(code) = keys::code_from_desktop_keycode(keycode) else {
+                key_row.set_subtitle(&keys::key_label(&saved_key(&path)));
+                return gtk::glib::Propagation::Stop;
+            };
+            let text = keys::binding_text(code);
+            match update(&path, |s| s.overlay_key.clone_from(&text)) {
+                Ok(()) => key_row.set_subtitle(&keys::key_label(&text)),
+                Err(e) => {
+                    on_error(&format!("Could not save: {e}"));
+                    key_row.set_subtitle(&keys::key_label(&saved_key(&path)));
+                }
+            }
+            gtk::glib::Propagation::Stop
+        });
+    }
+
+    // --- the controller button ---
+    let pad_subtitle = {
+        let devices = hooks.devices.clone();
+        Rc::new(move |saved: &str| {
+            let mut text = keys::button_label(saved);
+            match devices() {
+                Some((_, keys::KeyAccess::NoPermission)) => {
+                    text.push_str("  \u{00B7}  no permission to read controllers yet");
+                }
+                Some((d, _)) if d.controllers == 0 => {
+                    text.push_str("  \u{00B7}  no controller detected");
+                }
+                _ => {}
+            }
+            text
+        })
+    };
+    let pad_row = adw::ActionRow::builder()
+        .title("Controller button")
+        .subtitle(pad_subtitle(&current.overlay_button))
+        .build();
+    let pad_change = gtk::Button::builder()
+        .label("Change")
+        .valign(gtk::Align::Center)
+        .build();
+    let pad_clear = gtk::Button::builder()
+        .label("Clear")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    pad_row.add_suffix(&pad_change);
+    pad_row.add_suffix(&pad_clear);
+    group.add(&pad_row);
+
+    let pad_listening = Rc::new(Cell::new(false));
+    {
+        let (pad_listening, pad_row, pad_change) =
+            (pad_listening.clone(), pad_row.clone(), pad_change.clone());
+        let (path, on_error, hooks_capture, hooks_cancel, subtitle) = (
+            path.clone(),
+            on_error.clone(),
+            hooks.capture_button.clone(),
+            hooks.cancel_capture.clone(),
+            pad_subtitle.clone(),
+        );
+        pad_change.clone().connect_clicked(move |_| {
+            if pad_listening.get() {
+                pad_listening.set(false);
+                hooks_cancel();
+                pad_change.set_label("Change");
+                pad_row.set_subtitle(&subtitle(&saved_button(&path)));
+                return;
+            }
+            pad_listening.set(true);
+            pad_change.set_label("Cancel");
+            pad_row.set_subtitle("Press a button on your controller\u{2026}");
+            let (pad_listening, pad_row, pad_change) =
+                (pad_listening.clone(), pad_row.clone(), pad_change.clone());
+            let (path, on_error, subtitle) = (path.clone(), on_error.clone(), subtitle.clone());
+            hooks_capture(Box::new(move |code| {
+                pad_listening.set(false);
+                pad_change.set_label("Change");
+                if let Some(code) = code {
+                    let text = format!("code:{code}");
+                    if let Err(e) = update(&path, |s| s.overlay_button.clone_from(&text)) {
+                        on_error(&format!("Could not save: {e}"));
+                    }
+                } else {
+                    on_error("No button was pressed. Is the controller connected and the permission set?");
+                }
+                pad_row.set_subtitle(&subtitle(&saved_button(&path)));
+            }));
+        });
+    }
+    {
+        let (path, pad_row, on_error, subtitle) = (
+            path.clone(),
+            pad_row.clone(),
+            on_error.clone(),
+            pad_subtitle.clone(),
+        );
+        let cancel = hooks.cancel_capture.clone();
+        pad_clear.connect_clicked(move |_| {
+            cancel();
+            match update(&path, |s| s.overlay_button = String::new()) {
+                Ok(()) => pad_row.set_subtitle(&subtitle("")),
+                Err(e) => on_error(&format!("Could not save: {e}")),
+            }
+        });
+    }
+    (group, controller)
+}
+
+fn saved_key(path: &Path) -> String {
+    Settings::load(path)
+        .map(|s| s.overlay_key)
+        .unwrap_or_default()
+}
+
+fn saved_button(path: &Path) -> String {
+    Settings::load(path)
+        .map(|s| s.overlay_button)
+        .unwrap_or_default()
 }

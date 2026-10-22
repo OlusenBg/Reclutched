@@ -90,8 +90,12 @@ pub struct Settings {
     pub username: Option<String>,
     /// Overlay, two screens or both; chosen in the setup.
     pub display_mode: Option<DisplayMode>,
-    /// The key you hold to show the overlay (a key name like "Tab"; see the app's key list).
+    /// The key you hold to show the overlay: a name like "Tab" or `code:<number>` for any other
+    /// key; empty for none.
     pub overlay_key: String,
+    /// The controller button you hold to show the overlay (same format; empty for none). The key
+    /// and the button both work when both are set.
+    pub overlay_button: String,
     /// Extra words that identify the Rocket League window (its class or title) when the usual
     /// ones do not match your launcher. Not a "what to collect" switch.
     pub game_window_hints: Vec<String>,
@@ -117,6 +121,7 @@ impl Default for Settings {
             username: None,
             display_mode: None,
             overlay_key: "Tab".to_string(),
+            overlay_button: String::new(),
             game_window_hints: Vec::new(),
         }
     }

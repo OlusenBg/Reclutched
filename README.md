@@ -18,7 +18,8 @@
   by itself when a match starts: score and clock, possession for both teams, your boost and speed, a live
   scoreboard and the latest goals, saves and demolitions. Close it and it stays closed for that match.
 - **In-game overlay.** Choose *Overlay* or *Both*: a small "Tracking" light sits in the corner of the game (red
-  "Stats API off" when the game is not sending stats), and while you hold a key (Tab by default) a panel shows
+  "Stats API off" when the game is not sending stats), and while you hold a key (Tab by default) or a controller
+  button a panel shows
   possession on top, your habits as bars on the left (each with a tick for your own average from past matches)
   and the players on the right. See [the overlay](#the-in-game-overlay) below.
 - **Everything is a switch.** Each thing we collect can be turned on or off in the settings.
@@ -28,8 +29,8 @@
 
 - Uses only the game's **official local Stats API**. No injection, no hooks, nothing that touches the game.
 - Everything stays on your computer in a local SQLite file. Nothing is uploaded.
-- The overlay key is read from your keyboard device only while the overlay is on; every other key is
-  dropped on the spot (nothing is stored, logged or sent), and the key still reaches the game.
+- The overlay key and controller button are read from your input devices only while the overlay is on; every
+  other key and button is dropped on the spot (nothing is stored, logged or sent), and the game still gets them.
 - Your settings live in `~/.config/reclutched/settings.json`, your matches in
   `~/.local/share/reclutched/matches.db`.
 
@@ -78,14 +79,16 @@ it. It needs:
 - the game in **borderless windowed** mode (a fullscreen game hides every overlay);
 - to show only on the game window, Hyprland for now (we read its focus events). On other desktops the overlay
   shows while the game is connected;
-- permission to read your keyboard for the hold key (Wayland apps cannot see keys while the game has the
-  focus). Add yourself to the `input` group once, then log out and in:
+- permission to read your keyboard and controller for the hold key or button (Wayland apps cannot see them while
+  the game has the focus). Add yourself to the `input` group once, then log out and in:
 
   ```bash
   sudo usermod -aG input $USER
   ```
 
-Pick the key in **Settings → Overlay key** (Tab by default, the game's own scoreboard key). If the game window
+Set the key and the button in **Settings → Overlay**: press **Change**, then press the key (or the button on your
+controller). Tab is the default key, the game's own scoreboard key; the controller button is not set by default.
+You can have both, either one shows the overlay. The D-pad works as a button too. If the game window
 is not recognised, add a word from its class or title to `game_window_hints` in
 `~/.config/reclutched/settings.json` (`hyprctl activewindow` shows them).
 
