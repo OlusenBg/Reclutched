@@ -19,9 +19,10 @@
   scoreboard and the latest goals, saves and demolitions. Close it and it stays closed for that match.
 - **In-game overlay.** Choose *Overlay* or *Both*: a small "Tracking" light sits in the corner of the game (red
   "Stats API off" when the game is not sending stats), and while you hold a key (Tab by default) or a controller
-  button a panel shows
-  possession on top, your habits as bars on the left (each with a tick for your own average from past matches)
-  and the players on the right. See [the overlay](#the-in-game-overlay) below.
+  button a panel shows possession on top, your habits as bars on the left (each with a tick for your own
+  average from past matches) and the players on the right. Between matches (for example in the game's menus) the
+  same button shows how your recent matches went instead: a strip of green, red and amber squares, your last
+  matches with their scores, and your averages. See [the overlay](#the-in-game-overlay) below.
 - **Everything is a switch.** Each thing we collect can be turned on or off in the settings.
 - **Light on disk.** Only averages and small event rows are stored, never the raw 10-per-second data.
 

@@ -217,3 +217,57 @@ fn my_movement_averages_need_a_few_matches_and_use_only_my_rows() {
     assert!((avg.avg_boost - mine.avg_boost).abs() < 1e-9);
     assert!((avg.pct_supersonic - mine.pct_supersonic).abs() < 1e-9);
 }
+
+#[test]
+fn recent_form_counts_results_streaks_and_averages() {
+    use reclutched_core::rocketleague::storage::current_streak;
+    use reclutched_core::rocketleague::tracker::MatchResult;
+
+    let mut store = Store::open_in_memory().unwrap();
+    assert_eq!(store.recent_form(20).unwrap(), None, "no matches yet");
+
+    let base = real_match();
+    let me = base
+        .players
+        .iter()
+        .find(|p| p.slot == base.my_slot)
+        .unwrap()
+        .clone();
+    // Oldest to newest: loss, win, win, left early, win, win.
+    let results = [
+        MatchResult::Loss,
+        MatchResult::Win,
+        MatchResult::Win,
+        MatchResult::Abandoned,
+        MatchResult::Win,
+        MatchResult::Win,
+    ];
+    for (i, result) in results.into_iter().enumerate() {
+        let mut m = base.clone();
+        m.guid = Some(format!("form-{i}"));
+        m.ended_at += i as i64;
+        m.result = result;
+        store.save_match(&m).unwrap().expect("a new match");
+    }
+
+    let form = store.recent_form(20).unwrap().expect("matches exist");
+    assert_eq!(form.matches, 6);
+    assert_eq!((form.wins, form.losses, form.abandoned), (4, 1, 1));
+    // The two newest are wins; the left-early match ends the run behind them.
+    assert_eq!(form.streak, Some(("win".to_string(), 2)));
+    // Left-early matches are not part of the averages; the others are all the same match.
+    assert!((form.avg_goals - me.goals as f64).abs() < 1e-9);
+    assert!((form.avg_saves - me.saves as f64).abs() < 1e-9);
+    assert!((form.avg_score - me.score as f64).abs() < 1e-9);
+
+    // Only the last `n` matches count.
+    let last3 = store.recent_form(3).unwrap().unwrap();
+    assert_eq!((last3.matches, last3.wins, last3.abandoned), (3, 2, 1));
+
+    assert_eq!(current_streak(&[]), None);
+    assert_eq!(current_streak(&["abandoned", "win"]), None);
+    assert_eq!(
+        current_streak(&["loss", "loss", "loss", "win"]),
+        Some(("loss".to_string(), 3))
+    );
+}

@@ -563,10 +563,82 @@ pub struct MovementAverages {
     pub pct_on_wall: f64,
 }
 
+/// How your recent matches went: the overlay shows it when no match is on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentForm {
+    /// How many matches went into it.
+    pub matches: i64,
+    pub wins: i64,
+    pub losses: i64,
+    pub abandoned: i64,
+    /// What happened in the latest matches in a row: ("win", 3) is three wins in a row. `None`
+    /// when the latest match was a left-early one.
+    pub streak: Option<(String, usize)>,
+    /// Your numbers per finished match (left-early matches are not counted in these).
+    pub avg_score: f64,
+    pub avg_goals: f64,
+    pub avg_saves: f64,
+    pub avg_shots: f64,
+    /// Share of the time your team had the ball.
+    pub avg_possession: Option<f64>,
+}
+
+/// How many results in a row the newest ones share ("win" x3), newest first. `None` for a
+/// left-early match or no matches.
+pub fn current_streak(results_newest_first: &[&str]) -> Option<(String, usize)> {
+    let first = *results_newest_first.first()?;
+    if first == "abandoned" {
+        return None;
+    }
+    let count = results_newest_first
+        .iter()
+        .take_while(|r| **r == first)
+        .count();
+    Some((first.to_string(), count))
+}
+
 /// A comparison needs a few matches behind it, or "your average" is just the last match.
 pub const MIN_MATCHES_FOR_AVERAGES: i64 = 3;
 
 impl Store {
+    /// How your last `last` matches went (None when there are no matches at all).
+    pub fn recent_form(&self, last: u32) -> Result<Option<RecentForm>, StoreError> {
+        let rows = self.recent_matches(last)?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let count = |result: &str| rows.iter().filter(|r| r.result == result).count() as i64;
+        let results: Vec<&str> = rows.iter().map(|r| r.result.as_str()).collect();
+        let (score, goals, saves, shots, possession) = self.conn.query_row(
+            "SELECT AVG(p.score), AVG(p.goals), AVG(p.saves), AVG(p.shots), AVG(m.my_possession_pct)
+             FROM (SELECT * FROM matches ORDER BY ended_at DESC, id DESC LIMIT ?1) m
+             LEFT JOIN match_players p ON p.match_id = m.id AND p.slot = m.my_slot
+             WHERE m.result != 'abandoned'",
+            [last],
+            |r| {
+                Ok((
+                    r.get::<_, Option<f64>>(0)?,
+                    r.get::<_, Option<f64>>(1)?,
+                    r.get::<_, Option<f64>>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
+                    r.get::<_, Option<f64>>(4)?,
+                ))
+            },
+        )?;
+        Ok(Some(RecentForm {
+            matches: rows.len() as i64,
+            wins: count("win"),
+            losses: count("loss"),
+            abandoned: count("abandoned"),
+            streak: current_streak(&results),
+            avg_score: score.unwrap_or(0.0),
+            avg_goals: goals.unwrap_or(0.0),
+            avg_saves: saves.unwrap_or(0.0),
+            avg_shots: shots.unwrap_or(0.0),
+            avg_possession: possession,
+        }))
+    }
+
     /// Your own movement averages over your last `last` matches that have movement data, or
     /// `None` when there are fewer than [`MIN_MATCHES_FOR_AVERAGES`].
     pub fn my_movement_averages(&self, last: u32) -> Result<Option<MovementAverages>, StoreError> {

@@ -120,6 +120,8 @@ struct App {
     latest_live: RefCell<Option<LiveSnapshot>>,
     /// Your usual numbers, loaded when the panel needs them (and again after a match is saved).
     usual: RefCell<Option<MovementAverages>>,
+    /// Your recent matches, for the panel between matches (loaded together with `usual`).
+    recent: RefCell<Option<panel::Recent>>,
     usual_loaded: Cell<bool>,
 }
 
@@ -511,14 +513,20 @@ impl App {
             return;
         }
         if !self.usual_loaded.replace(true) {
-            let averages = Store::open(&self.db_path)
-                .ok()
+            let store = Store::open(&self.db_path).ok();
+            *self.usual.borrow_mut() = store
+                .as_ref()
                 .and_then(|store| store.my_movement_averages(30).ok().flatten());
-            *self.usual.borrow_mut() = averages;
+            *self.recent.borrow_mut() = store.as_ref().and_then(|store| {
+                let form = store.recent_form(20).ok().flatten()?;
+                let matches = store.recent_matches(20).ok()?;
+                Some(panel::Recent { matches, form })
+            });
         }
         overlay.show_panel(
             self.latest_live.borrow().as_ref(),
             self.usual.borrow().as_ref(),
+            self.recent.borrow().as_ref(),
         );
     }
 
@@ -715,6 +723,7 @@ fn activate(application: &adw::Application, args: &Args) {
         keys_timer_started: Cell::new(false),
         latest_live: RefCell::new(None),
         usual: RefCell::new(None),
+        recent: RefCell::new(None),
         usual_loaded: Cell::new(false),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped

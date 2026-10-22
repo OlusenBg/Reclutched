@@ -7,6 +7,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
+use reclutched_core::rocketleague::playlist::{default_map_path, PlaylistMap};
 use reclutched_core::rocketleague::storage::MovementAverages;
 use reclutched_core::rocketleague::tracker::LiveSnapshot;
 
@@ -64,6 +65,8 @@ pub struct Overlay {
     panel: gtk::Window,
     panel_root: gtk::Overlay,
     panel_pieces: RefCell<Vec<gtk::Widget>>,
+    /// Mode names for the list of recent matches.
+    names: PlaylistMap,
 }
 
 /// How see-through the pill is (1.0 = solid).
@@ -143,15 +146,23 @@ impl Overlay {
             panel,
             panel_root,
             panel_pieces: RefCell::new(Vec::new()),
+            names: default_map_path()
+                .and_then(|p| PlaylistMap::load(&p).ok())
+                .unwrap_or_else(PlaylistMap::with_builtin),
         }))
     }
 
     /// Shows (or refreshes) the panel for the match in `snapshot`; `None` means no match is on.
-    pub fn show_panel(&self, snapshot: Option<&LiveSnapshot>, usual: Option<&MovementAverages>) {
+    pub fn show_panel(
+        &self,
+        snapshot: Option<&LiveSnapshot>,
+        usual: Option<&MovementAverages>,
+        recent: Option<&panel::Recent>,
+    ) {
         for old in self.panel_pieces.borrow_mut().drain(..) {
             self.panel_root.remove_overlay(&old);
         }
-        let pieces = panel::build(snapshot, usual);
+        let pieces = panel::build(snapshot, usual, recent, &self.names);
         for piece in &pieces {
             self.panel_root.add_overlay(piece);
         }
