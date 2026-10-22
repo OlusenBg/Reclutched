@@ -517,7 +517,9 @@ fn load_css() {
         gtk::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            // Same level as the user's own ~/.config/gtk-4.0/gtk.css (and added after it), so a themed
+            // gtk.css with see-through window colours cannot make this app see-through.
+            gtk::STYLE_PROVIDER_PRIORITY_USER,
         );
     }
 }
