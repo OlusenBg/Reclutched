@@ -12,6 +12,10 @@ use crate::flow::{username_error, ADV_EVENTS, ADV_HABITS, ADV_MATCHES};
 use crate::keys;
 use crate::setup::{switch_subtitle, switch_title};
 
+/// The Hyprland (0.55+, Lua config) rule that draws our window fully opaque. See the README.
+const HYPRLAND_OPAQUE_RULE: &str =
+    r#"hl.window_rule({ match = { class = "^dev\\.reclutched\\.Reclutched$" }, opaque = true })"#;
+
 const MODES: [(DisplayMode, &str); 3] = [
     (DisplayMode::Overlay, "Overlay"),
     (DisplayMode::TwoScreens, "2 Screens"),
@@ -336,6 +340,31 @@ pub fn open(
             group.add(&row);
         }
         page.add(&group);
+    }
+
+    // --- Hyprland draws every window at active_opacity (0.9 in HyDE); a rule makes this one solid ---
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some() {
+        let window = adw::PreferencesGroup::builder()
+            .title("Window")
+            .description(
+                "Looks see-through? Hyprland dims every window. Add this line to your hyprland.lua",
+            )
+            .build();
+        let rule_row = adw::ActionRow::builder()
+            .title("Solid window rule")
+            .subtitle(HYPRLAND_OPAQUE_RULE)
+            .subtitle_selectable(true)
+            .build();
+        let copy = gtk::Button::builder()
+            .icon_name("edit-copy-symbolic")
+            .tooltip_text("Copy")
+            .valign(gtk::Align::Center)
+            .css_classes(["flat"])
+            .build();
+        copy.connect_clicked(|button| button.clipboard().set_text(HYPRLAND_OPAQUE_RULE));
+        rule_row.add_suffix(&copy);
+        window.add(&rule_row);
+        page.add(&window);
     }
 
     // --- where things live, and the way back to the setup ---

@@ -89,6 +89,29 @@ Pick the key in **Settings → Overlay key** (Tab by default, the game's own sco
 is not recognised, add a word from its class or title to `game_window_hints` in
 `~/.config/reclutched/settings.json` (`hyprctl activewindow` shows them).
 
+### Solid window on Hyprland
+
+Hyprland draws every window at `decoration:active_opacity` (HyDE sets 0.9, and 0.75 for inactive windows), so
+the app can look see-through and washed out. An app cannot opt out of this; add a rule once. On Hyprland 0.55+
+with the Lua config (`~/.config/hypr/hyprland.lua`):
+
+```lua
+hl.window_rule({
+  name = "reclutched_opaque",
+  match = { class = "^dev\\.reclutched\\.Reclutched$" },
+  opaque = true,
+})
+```
+
+On older versions with `hyprland.conf` (the exact keyword changed across releases, check the wiki for yours):
+
+```ini
+windowrule = opaque, class:^(dev.reclutched.Reclutched)$
+```
+
+Settings shows the Lua line with a copy button when it runs under Hyprland. The in-game overlay is transparent
+on purpose and is not affected.
+
 ### Turn on the Stats API
 
 Rocket League only shares your stats when its Stats API is on. In the app, open **Settings** and use
