@@ -5,10 +5,12 @@
 
 mod detail;
 mod flow;
+mod focus;
 mod format;
 mod list;
 mod live;
 mod mainview;
+mod overlay;
 mod settings_dialog;
 mod setup;
 mod splash;
@@ -88,6 +90,16 @@ struct App {
     live: RefCell<Option<Rc<live::LiveWindow>>>,
     /// The newest match whose live window the user closed; it is not opened again for it.
     live_dismissed: Cell<u64>,
+    /// Is the game window focused? (Hyprland only for now.)
+    focus: focus::GameFocus,
+    /// The in-game overlay (modes "Overlay" and "Both"), once it has been created.
+    overlay: RefCell<Option<Rc<overlay::Overlay>>>,
+    /// We already tried to create it (so a desktop without layer-shell is only tried once).
+    overlay_tried: Cell<bool>,
+    overlay_wanted: Cell<bool>,
+    /// What the status light shows now; the overlay's pill follows it.
+    status: Cell<tracking::Status>,
+    ticks: Cell<u32>,
 }
 
 /// Wraps a page with a flat, empty header bar, so the window can be moved and closed
@@ -164,6 +176,7 @@ impl App {
     }
 
     fn set_status(&self, status: tracking::Status) {
+        self.status.set(status);
         if let Some(view) = self.main_view.borrow().as_ref() {
             view.set_status(status);
         }
@@ -208,6 +221,7 @@ impl App {
                 return gtk::glib::ControlFlow::Break;
             };
             app.apply_updates();
+            app.update_overlay();
             gtk::glib::ControlFlow::Continue
         });
     }
@@ -297,6 +311,62 @@ impl App {
                     window.ended();
                 }
             }
+        }
+    }
+
+    /// Creates the overlay when the chosen mode wants it and keeps its pill up to date.
+    fn update_overlay(self: &Rc<Self>) {
+        let ticks = self.ticks.get();
+        self.ticks.set(ticks.wrapping_add(1));
+        // The mode can change in the settings; look about every two seconds.
+        if ticks.is_multiple_of(8) {
+            let mode = Settings::load(&self.settings_path)
+                .ok()
+                .and_then(|s| s.display_mode);
+            self.overlay_wanted.set(matches!(
+                mode,
+                Some(DisplayMode::Overlay | DisplayMode::Both)
+            ));
+        }
+        if !self.overlay_wanted.get() {
+            self.close_overlay();
+            return;
+        }
+        let existing = self.overlay.borrow().clone();
+        let overlay = match existing {
+            Some(overlay) => overlay,
+            None => {
+                if self.overlay_tried.replace(true) {
+                    return;
+                }
+                let Some(application) = self
+                    .window
+                    .application()
+                    .and_then(|a| a.downcast::<adw::Application>().ok())
+                else {
+                    return;
+                };
+                let Some(created) = overlay::Overlay::new(&application) else {
+                    eprintln!(
+                        "The overlay needs a Wayland desktop with layer-shell (Hyprland, Sway, KDE); it is off here."
+                    );
+                    return;
+                };
+                *self.overlay.borrow_mut() = Some(created.clone());
+                created
+            }
+        };
+        overlay.set_pill(overlay::pill_state(
+            self.status.get(),
+            self.focus.game_focused(),
+        ));
+    }
+
+    fn close_overlay(&self) {
+        self.overlay_tried.set(false);
+        let overlay = self.overlay.borrow_mut().take();
+        if let Some(overlay) = overlay {
+            overlay.close();
         }
     }
 
@@ -424,6 +494,12 @@ fn activate(application: &adw::Application, args: &Args) {
         watching: Cell::new(false),
         live: RefCell::new(None),
         live_dismissed: Cell::new(0),
+        focus: focus::GameFocus::start(settings.game_window_hints.clone()),
+        overlay: RefCell::new(None),
+        overlay_tried: Cell::new(false),
+        overlay_wanted: Cell::new(false),
+        status: Cell::new(tracking::Status::Off),
+        ticks: Cell::new(0),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped
     // when this function returns and every button handler would find a wizard that is gone.
@@ -436,6 +512,7 @@ fn activate(application: &adw::Application, args: &Args) {
         window.connect_close_request(move |_| {
             if let Some(app) = closing.upgrade() {
                 app.stop_tracking();
+                app.close_overlay();
             }
             gtk::glib::Propagation::Proceed
         });

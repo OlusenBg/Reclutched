@@ -38,6 +38,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
 
+      # The in-game overlay needs gtk4-layer-shell, which Ubuntu 24.04 does not package, so we build it.
+      # (Arch has it as the package `gtk4-layer-shell`.)
+      - name: Build gtk4-layer-shell
+        run: |
+          sudo apt-get install -y meson ninja-build libwayland-dev wayland-protocols
+          curl -sSL https://github.com/wmww/gtk4-layer-shell/archive/refs/tags/v1.0.4.tar.gz | tar xz
+          cd gtk4-layer-shell-1.0.4
+          meson setup build --prefix=/usr -Dexamples=false -Ddocs=false -Dtests=false -Dvapi=false -Dintrospection=false -Dsmoke-tests=false
+          ninja -C build
+          sudo ninja -C build install
+          sudo ldconfig
+
       - name: Format
         run: cargo fmt --all -- --check
 

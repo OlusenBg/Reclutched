@@ -187,3 +187,17 @@ progressbar.big-bar progress { min-height: 10px; border-radius: 5px; }
 progressbar.team-blue progress { background: #4f8fe0; }
 progressbar.team-orange progress { background: #e88a3a; }
 .cell-dim { color: #6f6563; }
+
+/* ---------- in-game overlay ---------- */
+window.overlay-window, window.overlay-window > * { background: transparent; box-shadow: none; }
+.overlay-pill {
+    background: rgba(20, 17, 17, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 999px;
+    padding: 7px 16px 7px 12px;
+}
+.pill-text { font-size: 13px; font-weight: 500; color: #e9e3e1; }
+.pill-dot { font-size: 11px; }
+.pill-dot.ok { color: #5fa371; }
+.pill-dot.bad { color: #d9534f; }
+.pill-dot.off { color: #8b817e; }

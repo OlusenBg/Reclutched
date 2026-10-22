@@ -30,3 +30,5 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 # Renamed so code says `gtk::` and `adw::`.
 gtk = { package = "gtk4", version = "0.9", features = ["v4_12"] }
 adw = { package = "libadwaita", version = "0.7", features = ["v1_5"] }
+# Draws the overlay above other windows on Wayland (needs the system library gtk4-layer-shell).
+gtk4-layer-shell = "0.5"

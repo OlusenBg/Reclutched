@@ -51,8 +51,7 @@ pub enum SettingsError {
     Json(#[from] serde_json::Error),
 }
 
-/// How the app shows live information while you play. Chosen in the setup; nothing uses it yet
-/// (the overlay and the live window do not exist yet).
+/// How the app shows live information while you play. Chosen in the setup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayMode {
@@ -91,6 +90,11 @@ pub struct Settings {
     pub username: Option<String>,
     /// Overlay, two screens or both; chosen in the setup.
     pub display_mode: Option<DisplayMode>,
+    /// The key you hold to show the overlay (a key name like "Tab"; see the app's key list).
+    pub overlay_key: String,
+    /// Extra words that identify the Rocket League window (its class or title) when the usual
+    /// ones do not match your launcher. Not a "what to collect" switch.
+    pub game_window_hints: Vec<String>,
 }
 
 impl Default for Settings {
@@ -112,6 +116,8 @@ impl Default for Settings {
             game_config_dir: None,
             username: None,
             display_mode: None,
+            overlay_key: "Tab".to_string(),
+            game_window_hints: Vec::new(),
         }
     }
 }

@@ -15,3 +15,5 @@ tokio.workspace = true
 clap.workspace = true
 gtk.workspace = true
 adw.workspace = true
+gtk4-layer-shell.workspace = true
+serde_json.workspace = true
