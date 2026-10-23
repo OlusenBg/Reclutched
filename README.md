@@ -159,9 +159,9 @@ Run only one of the app or `reclutched track` at a time.
 | Stage | |
 |---|---|
 | 1. Stats tracking | Done |
-| 2. Desktop app (UI/UX) | In progress: setup, history, details and settings work; testing and first release next |
-| 3. Capturing and clipping | Planned (will use an existing recorder) |
-| 4. Overlay | First version (needs testing on more desktops) |
+| 2. Desktop app (UI/UX) | Done in v1.0.0: setup, history, details, live window and settings |
+| 3. Overlay | Done in v1.0.0 (Hyprland tested; other Wayland desktops need testing) |
+| 4. Capturing and clipping | Planned next (will use an existing recorder) |
 
 ## Project layout
 
