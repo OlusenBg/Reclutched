@@ -51,7 +51,7 @@ pub struct MainView {
 }
 
 /// Your time zone's offset from UTC in seconds, and today's date there.
-fn local_now() -> (i64, Day) {
+pub fn local_now() -> (i64, Day) {
     match gtk::glib::DateTime::now_local() {
         Ok(now) => {
             let offset = now.utc_offset().as_microseconds() / 1_000_000;
@@ -416,7 +416,6 @@ impl MainView {
     }
 
     /// Opens a day, month or year (used by the calendar).
-    #[allow(dead_code)] // the calendar page opens days with this (next step)
     pub fn open_period(&self, key: &str) {
         self.select(Target::Period(key.to_string()));
     }

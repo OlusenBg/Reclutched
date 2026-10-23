@@ -3,6 +3,7 @@
 //! First launch: a loading screen, then the setup wizard. After that the main window with your
 //! match history, the details of each match and the settings.
 
+mod calendar;
 mod detail;
 mod flow;
 mod focus;
@@ -174,7 +175,7 @@ impl App {
         let calendar = Rc::downgrade(self);
         let on_calendar: Rc<dyn Fn()> = Rc::new(move || {
             if let Some(app) = calendar.upgrade() {
-                app.toast("The calendar is coming in the next step");
+                app.open_calendar();
             }
         });
         let graphs = Rc::downgrade(self);
@@ -561,6 +562,33 @@ impl App {
         }
     }
 
+    /// The calendar page; clicking a played day opens it in your matches.
+    fn open_calendar(self: &Rc<Self>) {
+        let (offset, today) = mainview::local_now();
+        let weak = Rc::downgrade(self);
+        let hooks = calendar::Hooks {
+            on_back: {
+                let weak = weak.clone();
+                Rc::new(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.pages.set_visible_child_name("main");
+                    }
+                })
+            },
+            on_open: Rc::new(move |key: &str| {
+                if let Some(app) = weak.upgrade() {
+                    app.pages.set_visible_child_name("main");
+                    if let Some(view) = app.main_view.borrow().as_ref() {
+                        view.open_period(key);
+                    }
+                }
+            }),
+        };
+        let page = calendar::build(self.db_path.clone(), offset, today, hooks);
+        self.set_page("calendar", &page);
+        self.pages.set_visible_child_name("calendar");
+    }
+
     /// Shows the settings as a page inside the window (the back arrow returns to your matches).
     fn open_settings(self: &Rc<Self>) {
         self.open_settings_at(None);
@@ -781,6 +809,10 @@ fn activate(application: &adw::Application, args: &Args) {
                 if let Some(view) = app.main_view.borrow().as_ref() {
                     view.show_tab(&tab["main-".len()..]);
                 }
+            }
+            ("calendar", _) => {
+                app.show_main();
+                app.open_calendar();
             }
             ("settings", _) => {
                 app.show_main();
