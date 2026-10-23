@@ -139,6 +139,24 @@ windowrule = opaque, class:^(dev.reclutched.Reclutched)$
 Settings shows the Lua line with a copy button when it runs under Hyprland. The in-game overlay is transparent
 on purpose and is not affected. The app also stays dark and solid under themed `~/.config/gtk-4.0/gtk.css` files.
 
+### Capturing (screenshots, in progress)
+
+Settings → **Capture** turns on screenshots; clips and match recording are coming in the next steps. It uses
+your desktop's own screen-share portal, so it works on Wayland and X11 without anything injected into the game:
+the first time, your desktop asks what to share (your screen or the game window) and remembers the answer.
+Then press the screenshot key (F9 by default) or a controller button, and the picture is saved in
+`~/Videos/Reclutched/Screenshots` (change the folder in the same page).
+
+It needs GStreamer with the PipeWire plugin and a working screen-share portal for your desktop
+(`xdg-desktop-portal-hyprland`, `-kde`, `-gnome` or `-wlr`):
+
+```bash
+sudo pacman -S --needed gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire xdg-desktop-portal
+```
+
+The key is read the same way as the overlay key, so the same `input` group permission applies. Settings →
+Capture shows what is missing if something is.
+
 ### Turn on the Stats API
 
 Rocket League only shares your stats when its Stats API is on. In the app, open **Settings** and use

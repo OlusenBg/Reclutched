@@ -4,6 +4,7 @@
 //! match history, the details of each match and the settings.
 
 mod calendar;
+mod capture;
 mod detail;
 mod flow;
 mod focus;
@@ -70,6 +71,12 @@ struct Args {
     /// Developer option: act as if the overlay key were held down (for screenshots).
     #[arg(long, hide = true)]
     hold_key: bool,
+    /// Developer option: capture a moving test picture instead of the screen.
+    #[arg(long, hide = true)]
+    capture_test: bool,
+    /// Developer option: take a screenshot a few seconds after the main page opens.
+    #[arg(long, hide = true)]
+    capture_shot_at_start: bool,
 }
 
 fn parse_size(text: &str) -> Result<(i32, i32), String> {
@@ -128,6 +135,14 @@ struct App {
     /// Your recent matches, for the panel between matches (loaded together with `usual`).
     recent: RefCell<Option<panel::Recent>>,
     usual_loaded: Cell<bool>,
+    /// Screenshots (and later clips): the screen-share session and what it is doing.
+    screen: capture::Capture,
+    /// Watches the screenshot key and controller button.
+    shot_keys: RefCell<Option<keys::KeyWatcher>>,
+    /// Screenshots being saved; each answers once.
+    shots: RefCell<Vec<std::sync::mpsc::Receiver<Result<PathBuf, String>>>>,
+    shot_timer_started: Cell<bool>,
+    shot_at_start: Cell<bool>,
 }
 
 /// Wraps a page with a flat, empty header bar, so the window can be moved and closed
@@ -215,6 +230,7 @@ impl App {
             self.set_status(tracking::Status::Off);
         }
         self.watch_tracking();
+        self.start_capture_if_wanted();
     }
 
     fn set_status(&self, status: tracking::Status) {
@@ -476,6 +492,108 @@ impl App {
         });
     }
 
+    /// Turns capturing on or off. On: the desktop may ask what to share.
+    fn turn_capture(self: &Rc<Self>, on: bool) {
+        if on {
+            self.screen.turn_on();
+            self.watch_screenshot_keys();
+        } else {
+            self.screen.turn_off();
+        }
+    }
+
+    /// Starts capturing at launch when it was left on, and the screenshot key watcher.
+    fn start_capture_if_wanted(self: &Rc<Self>) {
+        let settings = Settings::load(&self.settings_path).unwrap_or_default();
+        if settings.capture_enabled {
+            self.turn_capture(true);
+        }
+        if self.shot_at_start.replace(false) {
+            let app = Rc::downgrade(self);
+            gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
+                if let Some(app) = app.upgrade() {
+                    app.take_screenshot();
+                }
+            });
+        }
+    }
+
+    /// Saves a screenshot and says where it went (or why not).
+    fn take_screenshot(self: &Rc<Self>) {
+        let settings = Settings::load(&self.settings_path).unwrap_or_default();
+        let Some(folder) = settings.capture_folder() else {
+            self.toast("No folder to save screenshots in (set one in Settings, Capture)");
+            return;
+        };
+        let stamp = gtk::glib::DateTime::now_local()
+            .ok()
+            .and_then(|now| now.format("%Y-%m-%d %H-%M-%S").ok())
+            .map_or_else(|| "screenshot".to_string(), |s| s.to_string());
+        let answer = self.screen.screenshot(folder, &stamp);
+        self.shots.borrow_mut().push(answer);
+    }
+
+    /// Follows the screenshot key and button, and reports finished screenshots.
+    fn watch_screenshot_keys(self: &Rc<Self>) {
+        if self.shot_timer_started.replace(true) {
+            return;
+        }
+        let app = Rc::downgrade(self);
+        let ticks = Cell::new(0u32);
+        gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+            let Some(app) = app.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            // Every couple of seconds: start or retune the watcher from the saved settings.
+            if ticks.get().is_multiple_of(20) {
+                let settings = Settings::load(&app.settings_path).unwrap_or_default();
+                let wanted = settings.capture_enabled
+                    && (!settings.screenshot_key.is_empty()
+                        || !settings.screenshot_button.is_empty());
+                let mut watcher = app.shot_keys.borrow_mut();
+                match (watcher.as_ref(), wanted) {
+                    (None, true) => {
+                        *watcher = Some(keys::KeyWatcher::start(
+                            &settings.screenshot_key,
+                            &settings.screenshot_button,
+                        ));
+                    }
+                    (Some(w), true) => {
+                        w.set_bindings(&settings.screenshot_key, &settings.screenshot_button);
+                    }
+                    // Not wanted any more: dropping the watcher closes its readers.
+                    (Some(_), false) => *watcher = None,
+                    (None, false) => {}
+                }
+            }
+            ticks.set(ticks.get().wrapping_add(1));
+            let pressed = app.shot_keys.borrow().as_ref().is_some_and(|w| {
+                w.drain()
+                    .iter()
+                    .any(|e| matches!(e, keys::KeyEvent::Pressed(_)))
+            });
+            if pressed {
+                app.take_screenshot();
+            }
+            let mut finished = Vec::new();
+            app.shots.borrow_mut().retain(|rx| match rx.try_recv() {
+                Ok(result) => {
+                    finished.push(result);
+                    false
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => true,
+                Err(_) => false,
+            });
+            for result in finished {
+                match result {
+                    Ok(path) => app.toast(&format!("Screenshot saved: {}", path.display())),
+                    Err(e) => app.toast(&format!("Screenshot failed: {e}")),
+                }
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
     /// For the settings page: listens for the next controller button (up to 12 seconds).
     fn capture_pad(self: &Rc<Self>, done: settings_page::PadCallback) {
         self.ensure_key_watcher();
@@ -657,7 +775,41 @@ impl App {
                     }
                 })
             },
-            devices: Rc::new(move || weak.upgrade().and_then(|app| app.key_devices())),
+            devices: {
+                let weak = weak.clone();
+                Rc::new(move || weak.upgrade().and_then(|app| app.key_devices()))
+            },
+            capture: settings_page::CaptureHooks {
+                status: {
+                    let weak = weak.clone();
+                    Rc::new(move || {
+                        weak.upgrade()
+                            .map_or(capture::Status::Off, |app| app.screen.status())
+                    })
+                },
+                turn: {
+                    let weak = weak.clone();
+                    Rc::new(move |on| {
+                        if let Some(app) = weak.upgrade() {
+                            app.turn_capture(on);
+                        }
+                    })
+                },
+                choose_again: {
+                    let weak = weak.clone();
+                    Rc::new(move || {
+                        if let Some(app) = weak.upgrade() {
+                            app.screen.forget_choice();
+                            app.turn_capture(true);
+                        }
+                    })
+                },
+                screenshot: Rc::new(move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.take_screenshot();
+                    }
+                }),
+            },
         };
         let page = settings_page::build(
             &self.window,
@@ -763,6 +915,7 @@ fn activate(application: &adw::Application, args: &Args) {
         .clone()
         .or_else(default_db_path)
         .unwrap_or_else(|| PathBuf::from("matches.db"));
+    let settings_path_for_capture = settings_path.clone();
     let app = Rc::new(App {
         window: window.clone(),
         pages,
@@ -793,6 +946,17 @@ fn activate(application: &adw::Application, args: &Args) {
         usual: RefCell::new(None),
         recent: RefCell::new(None),
         usual_loaded: Cell::new(false),
+        screen: capture::Capture::new(
+            settings_path_for_capture
+                .parent()
+                .map_or_else(|| PathBuf::from("."), PathBuf::from)
+                .join("capture_token"),
+            args.capture_test,
+        ),
+        shot_keys: RefCell::new(None),
+        shots: RefCell::new(Vec::new()),
+        shot_timer_started: Cell::new(false),
+        shot_at_start: Cell::new(args.capture_shot_at_start),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped
     // when this function returns and every button handler would find a wizard that is gone.

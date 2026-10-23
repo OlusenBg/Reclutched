@@ -99,6 +99,14 @@ pub struct Settings {
     /// Extra words that identify the Rocket League window (its class or title) when the usual
     /// ones do not match your launcher. Not a "what to collect" switch.
     pub game_window_hints: Vec<String>,
+    /// Capturing (screenshots, clips) is on. Needs permission from the desktop each session.
+    pub capture_enabled: bool,
+    /// The key that takes a screenshot (same format as `overlay_key`; empty for none).
+    pub screenshot_key: String,
+    /// The controller button that takes a screenshot (same format; empty for none).
+    pub screenshot_button: String,
+    /// Where screenshots (and later clips) go; `None` means `~/Videos/Reclutched`.
+    pub capture_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for Settings {
@@ -123,11 +131,23 @@ impl Default for Settings {
             overlay_key: "Tab".to_string(),
             overlay_button: String::new(),
             game_window_hints: Vec::new(),
+            capture_enabled: false,
+            screenshot_key: "F9".to_string(),
+            screenshot_button: String::new(),
+            capture_dir: None,
         }
     }
 }
 
 impl Settings {
+    /// The folder for screenshots and clips: your choice, or `~/Videos/Reclutched`.
+    pub fn capture_folder(&self) -> Option<PathBuf> {
+        self.capture_dir.clone().or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join("Videos").join("Reclutched"))
+        })
+    }
+
     /// `<config dir>/settings.json`.
     pub fn default_path() -> Option<PathBuf> {
         Some(crate::config_dir()?.join("settings.json"))

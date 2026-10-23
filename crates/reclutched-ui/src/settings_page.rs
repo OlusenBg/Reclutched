@@ -9,6 +9,7 @@ use adw::prelude::*;
 use reclutched_core::rocketleague::settings::{DisplayMode, Settings};
 use reclutched_core::rocketleague::statsapi;
 
+use crate::capture;
 use crate::flow::{username_error, ADV_EVENTS, ADV_HABITS, ADV_MATCHES};
 use crate::keys;
 use crate::setup::{switch_subtitle, switch_title};
@@ -120,6 +121,17 @@ impl SectionPage {
     }
 }
 
+/// What the Capture section needs from the app.
+#[derive(Clone)]
+pub struct CaptureHooks {
+    pub status: Rc<dyn Fn() -> capture::Status>,
+    /// Turns capturing on or off (on: the desktop asks what to share).
+    pub turn: Rc<dyn Fn(bool)>,
+    /// Forgets what you chose to share, then asks again.
+    pub choose_again: Rc<dyn Fn()>,
+    pub screenshot: Rc<dyn Fn()>,
+}
+
 /// What the page needs from the app around it.
 pub struct Hooks {
     /// The back arrow.
@@ -134,6 +146,7 @@ pub struct Hooks {
     pub cancel_capture: Rc<dyn Fn()>,
     /// The keyboards and controllers we read right now, when the watcher runs.
     pub devices: Rc<dyn Fn() -> Option<(keys::Devices, keys::KeyAccess)>>,
+    pub capture: CaptureHooks,
 }
 
 /// Builds the settings page. It is shown inside the main window with a back arrow, and changes
@@ -153,6 +166,7 @@ pub fn build(
     let general_page = SectionPage::new("General");
     let overlay_page = SectionPage::new("Overlay");
     let game_page = SectionPage::new("Rocket League");
+    let capture_page = SectionPage::new("Capture");
     let track_page = SectionPage::new("What to track");
     let data_page = SectionPage::new("Your data");
 
@@ -205,8 +219,18 @@ pub fn build(
     profile.add(&mode_row);
 
     general_page.add(&profile);
-    let (overlay_group, key_controller) = overlay_group(&path, &current, &on_error, &hooks);
+    let (overlay_group, key_controller) = binding_group(
+        "Hold to show",
+        "Hold the key or the button to show the overlay in the game (Overlay and Both modes). Set one or both; either works. Reading them needs permission: sudo usermod -aG input $USER, then log out and in.",
+        OVERLAY_BINDING,
+        &path,
+        &current,
+        &on_error,
+        &hooks,
+    );
     overlay_page.add(&overlay_group);
+    let shot_controller =
+        capture_section(&capture_page, parent, &path, &current, &on_error, &hooks);
 
     // --- Rocket League: where it is, and whether its Stats API is on ---
     let game = adw::PreferencesGroup::builder()
@@ -453,9 +477,10 @@ pub fn build(
     }
     header.pack_start(&back);
     header.set_title_widget(Some(&adw::WindowTitle::new("Settings", "")));
-    let sections: [(&str, &str, &SectionPage); 5] = [
+    let sections: [(&str, &str, &SectionPage); 6] = [
         ("general", "General", &general_page),
         ("overlay", "Overlay", &overlay_page),
+        ("capture", "Capture", &capture_page),
         ("game", "Rocket League", &game_page),
         ("track", "What to track", &track_page),
         ("data", "Your data", &data_page),
@@ -505,27 +530,233 @@ pub fn build(
     view.add_top_bar(&header);
     view.set_content(Some(&body));
     view.add_controller(key_controller);
+    view.add_controller(shot_controller);
     view.upcast()
 }
 
-/// The two ways to hold the overlay: a keyboard key and a controller button. Both can be set;
-/// either one works. Returns the group and the key controller that must be added to the page
-/// (it catches the next key press while you are setting the key).
-fn overlay_group(
+/// The Capture section: the switch, what is captured, the screenshot key and where files go.
+/// Returns the key controller for the screenshot key row.
+fn capture_section(
+    page: &SectionPage,
+    parent: &adw::ApplicationWindow,
+    path: &Rc<PathBuf>,
+    current: &Settings,
+    on_error: &Rc<dyn Fn(&str)>,
+    hooks: &Hooks,
+) -> gtk::EventControllerKey {
+    let group = adw::PreferencesGroup::builder()
+        .title("Screenshots and clips")
+        .description("Your desktop asks once what to share (your screen or the game window). Reclutched only records while this is on.")
+        .build();
+    let switch = adw::SwitchRow::builder()
+        .title("Capturing")
+        .subtitle("Turn it on to take screenshots")
+        .active(current.capture_enabled)
+        .build();
+    let status = adw::ActionRow::builder().title("Status").build();
+    let choose_again = gtk::Button::builder()
+        .label("Choose again")
+        .valign(gtk::Align::Center)
+        .build();
+    status.add_suffix(&choose_again);
+    let shot_now = adw::ActionRow::builder()
+        .title("Take a screenshot now")
+        .subtitle("A test: the same as pressing the key")
+        .activatable(true)
+        .build();
+    shot_now.add_suffix(&gtk::Image::from_icon_name("camera-photo-symbolic"));
+    group.add(&switch);
+    group.add(&status);
+    group.add(&shot_now);
+    page.add(&group);
+
+    let show = {
+        let (status, status_fn) = (status.clone(), hooks.capture.status.clone());
+        Rc::new(move || {
+            let (text, ready) = match status_fn() {
+                capture::Status::Off => ("Off".to_string(), false),
+                capture::Status::Asking => (
+                    "Waiting for your desktop to ask what to share\u{2026}".to_string(),
+                    false,
+                ),
+                capture::Status::Ready(what) => (format!("Ready, capturing {what}"), true),
+                capture::Status::Failed(e) => (format!("Could not start: {e}"), false),
+            };
+            status.set_subtitle(&text);
+            ready
+        })
+    };
+    show();
+    {
+        let (path, on_error, turn, show) = (
+            path.clone(),
+            on_error.clone(),
+            hooks.capture.turn.clone(),
+            show.clone(),
+        );
+        switch.connect_active_notify(move |row| {
+            let on = row.is_active();
+            if let Err(e) = update(&path, |s| s.capture_enabled = on) {
+                on_error(&format!("Could not save: {e}"));
+            }
+            turn(on);
+            show();
+        });
+    }
+    {
+        let again = hooks.capture.choose_again.clone();
+        choose_again.connect_clicked(move |_| again());
+    }
+    {
+        let shot = hooks.capture.screenshot.clone();
+        shot_now.connect_activated(move |_| shot());
+    }
+    // Keep the status line up to date while the page is open.
+    {
+        let (status, show) = (status.downgrade(), show);
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(600), move || {
+            if status.upgrade().is_none() {
+                return gtk::glib::ControlFlow::Break;
+            }
+            show();
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
+    let (shot_group, controller) = binding_group(
+        "Screenshot",
+        "Press the key or the button to save a picture of the game. Reading them needs the same permission as the overlay key: sudo usermod -aG input $USER, then log out and in.",
+        SCREENSHOT_BINDING,
+        path,
+        current,
+        on_error,
+        hooks,
+    );
+    page.add(&shot_group);
+
+    // --- where files go ---
+    let files = adw::PreferencesGroup::builder().title("Saving").build();
+    let folder_text = |s: &Settings| {
+        s.capture_folder()
+            .map_or("(unknown)".to_string(), |f| f.display().to_string())
+    };
+    let folder_row = adw::ActionRow::builder()
+        .title("Folder")
+        .subtitle(folder_text(current))
+        .subtitle_selectable(true)
+        .build();
+    let choose = gtk::Button::builder()
+        .label("Choose\u{2026}")
+        .valign(gtk::Align::Center)
+        .build();
+    folder_row.add_suffix(&choose);
+    files.add(&folder_row);
+    {
+        let (path, on_error, parent, folder_row) = (
+            path.clone(),
+            on_error.clone(),
+            parent.clone(),
+            folder_row.clone(),
+        );
+        choose.connect_clicked(move |_| {
+            let dialog = gtk::FileDialog::builder()
+                .title("Where should screenshots and clips go?")
+                .build();
+            let (path, on_error, folder_row) = (path.clone(), on_error.clone(), folder_row.clone());
+            dialog.select_folder(Some(&parent), gtk::gio::Cancellable::NONE, move |result| {
+                let Ok(file) = result else { return };
+                let Some(chosen) = file.path() else { return };
+                match update(&path, |s| s.capture_dir = Some(chosen.clone())) {
+                    Ok(()) => folder_row.set_subtitle(&chosen.display().to_string()),
+                    Err(e) => on_error(&format!("Could not save: {e}")),
+                }
+            });
+        });
+    }
+    page.add(&files);
+
+    // --- what has to be installed ---
+    let needs = adw::PreferencesGroup::builder()
+        .title("Requirements")
+        .build();
+    let (text, fine) = match capture::gst::check_elements(&capture::SCREENSHOT_ELEMENTS) {
+        Ok(()) => (
+            "GStreamer is installed with everything needed".to_string(),
+            true,
+        ),
+        Err(e) => (e, false),
+    };
+    let row = adw::ActionRow::builder()
+        .title(if fine {
+            "GStreamer"
+        } else {
+            "GStreamer needs attention"
+        })
+        .subtitle(text)
+        .subtitle_selectable(true)
+        .build();
+    needs.add(&row);
+    page.add(&needs);
+    controller
+}
+
+/// Where one saved binding lives in the settings.
+#[derive(Clone, Copy)]
+struct Field {
+    get: fn(&Settings) -> String,
+    set: fn(&mut Settings, String),
+}
+
+/// A keyboard key and a controller button for one action. Both can be set; either one works.
+#[derive(Clone, Copy)]
+struct Binding {
+    key: Field,
+    button: Field,
+}
+
+const OVERLAY_BINDING: Binding = Binding {
+    key: Field {
+        get: |s| s.overlay_key.clone(),
+        set: |s, v| s.overlay_key = v,
+    },
+    button: Field {
+        get: |s| s.overlay_button.clone(),
+        set: |s, v| s.overlay_button = v,
+    },
+};
+
+const SCREENSHOT_BINDING: Binding = Binding {
+    key: Field {
+        get: |s| s.screenshot_key.clone(),
+        set: |s, v| s.screenshot_key = v,
+    },
+    button: Field {
+        get: |s| s.screenshot_button.clone(),
+        set: |s, v| s.screenshot_button = v,
+    },
+};
+
+/// The key and the controller button for one action, as two rows in a group. Returns the group
+/// and the key controller that must be added to the page (it catches the next key press while
+/// you are setting the key).
+fn binding_group(
+    title: &str,
+    description: &str,
+    fields: Binding,
     path: &Rc<PathBuf>,
     current: &Settings,
     on_error: &Rc<dyn Fn(&str)>,
     hooks: &Hooks,
 ) -> (adw::PreferencesGroup, gtk::EventControllerKey) {
     let group = adw::PreferencesGroup::builder()
-        .title("Hold to show")
-        .description("Hold the key or the button to show the overlay in the game (Overlay and Both modes). Set one or both; either works. Reading them needs permission: sudo usermod -aG input $USER, then log out and in.")
+        .title(title)
+        .description(description)
         .build();
 
     // --- the keyboard key ---
     let key_row = adw::ActionRow::builder()
         .title("Keyboard key")
-        .subtitle(keys::key_label(&current.overlay_key))
+        .subtitle(keys::key_label(&(fields.key.get)(current)))
         .build();
     let key_change = gtk::Button::builder()
         .label("Change")
@@ -550,7 +781,7 @@ fn overlay_group(
                 // Pressed again: stop listening.
                 key_listening.set(false);
                 key_change.set_label("Change");
-                key_row.set_subtitle(&keys::key_label(&saved_key(&path)));
+                key_row.set_subtitle(&keys::key_label(&saved(&path, fields.key.get)));
             } else {
                 key_listening.set(true);
                 key_change.set_label("Cancel");
@@ -561,7 +792,7 @@ fn overlay_group(
     {
         let (path, key_row, on_error) = (path.clone(), key_row.clone(), on_error.clone());
         key_clear.connect_clicked(move |_| {
-            match update(&path, |s| s.overlay_key = String::new()) {
+            match update(&path, |s| (fields.key.set)(s, String::new())) {
                 Ok(()) => key_row.set_subtitle(&keys::key_label("")),
                 Err(e) => on_error(&format!("Could not save: {e}")),
             }
@@ -580,15 +811,15 @@ fn overlay_group(
             key_listening.set(false);
             key_change.set_label("Change");
             let Some(code) = keys::code_from_desktop_keycode(keycode) else {
-                key_row.set_subtitle(&keys::key_label(&saved_key(&path)));
+                key_row.set_subtitle(&keys::key_label(&saved(&path, fields.key.get)));
                 return gtk::glib::Propagation::Stop;
             };
             let text = keys::binding_text(code);
-            match update(&path, |s| s.overlay_key.clone_from(&text)) {
+            match update(&path, |s| (fields.key.set)(s, text.clone())) {
                 Ok(()) => key_row.set_subtitle(&keys::key_label(&text)),
                 Err(e) => {
                     on_error(&format!("Could not save: {e}"));
-                    key_row.set_subtitle(&keys::key_label(&saved_key(&path)));
+                    key_row.set_subtitle(&keys::key_label(&saved(&path, fields.key.get)));
                 }
             }
             gtk::glib::Propagation::Stop
@@ -614,7 +845,7 @@ fn overlay_group(
     };
     let pad_row = adw::ActionRow::builder()
         .title("Controller button")
-        .subtitle(pad_subtitle(&current.overlay_button))
+        .subtitle(pad_subtitle(&(fields.button.get)(current)))
         .build();
     let pad_change = gtk::Button::builder()
         .label("Change")
@@ -645,7 +876,7 @@ fn overlay_group(
                 pad_listening.set(false);
                 hooks_cancel();
                 pad_change.set_label("Change");
-                pad_row.set_subtitle(&subtitle(&saved_button(&path)));
+                pad_row.set_subtitle(&subtitle(&saved(&path, fields.button.get)));
                 return;
             }
             pad_listening.set(true);
@@ -659,13 +890,13 @@ fn overlay_group(
                 pad_change.set_label("Change");
                 if let Some(code) = code {
                     let text = format!("code:{code}");
-                    if let Err(e) = update(&path, |s| s.overlay_button.clone_from(&text)) {
+                    if let Err(e) = update(&path, |s| (fields.button.set)(s, text.clone())) {
                         on_error(&format!("Could not save: {e}"));
                     }
                 } else {
                     on_error("No button was pressed. Is the controller connected and the permission set?");
                 }
-                pad_row.set_subtitle(&subtitle(&saved_button(&path)));
+                pad_row.set_subtitle(&subtitle(&saved(&path, fields.button.get)));
             }));
         });
     }
@@ -679,7 +910,7 @@ fn overlay_group(
         let cancel = hooks.cancel_capture.clone();
         pad_clear.connect_clicked(move |_| {
             cancel();
-            match update(&path, |s| s.overlay_button = String::new()) {
+            match update(&path, |s| (fields.button.set)(s, String::new())) {
                 Ok(()) => pad_row.set_subtitle(&subtitle("")),
                 Err(e) => on_error(&format!("Could not save: {e}")),
             }
@@ -688,14 +919,6 @@ fn overlay_group(
     (group, controller)
 }
 
-fn saved_key(path: &Path) -> String {
-    Settings::load(path)
-        .map(|s| s.overlay_key)
-        .unwrap_or_default()
-}
-
-fn saved_button(path: &Path) -> String {
-    Settings::load(path)
-        .map(|s| s.overlay_button)
-        .unwrap_or_default()
+fn saved(path: &Path, get: fn(&Settings) -> String) -> String {
+    Settings::load(path).map(|s| get(&s)).unwrap_or_default()
 }
