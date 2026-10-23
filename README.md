@@ -12,6 +12,17 @@
 ## What it does
 
 - **Tracks your matches by itself.** Open the app, start Rocket League, and every match is saved when it ends.
+- **Home, days, months and years.** The first row of the list is **Home**: today only. Today's matches are
+  listed one by one; yesterday and older days collapse into one row per day (the day ends at midnight), older
+  months of the year group their days, and older years only list their months. Open any of them for its
+  numbers (record, time played, win rate, averages, how you move). Every match is kept; these are just summaries
+  computed from them.
+- **Calendar.** The calendar button next to Settings shows a year as twelve months (use the `<` `>` arrows to
+  change year). A day is gray if you did not play and goes through a gradient of red the more you played, with
+  a flashing red at 8 hours or more. Click a played day to open it.
+- **Graphs.** The graph button shows how you are doing over time: win rate, score, goals, assists, saves,
+  shots, possession, boost, time out of boost and speed, over 30 days, 90 days, this year or all time, each
+  with a note on whether you are improving, steady or slipping.
 - **Match history and details.** Result, score, mode and time, then Overview, Players, Goals and Movement
   (possession, boost habits, speed, touches, goals with your boost at that moment).
 - **Live window for a second screen.** Choose *2 Screens* or *Both* in the setup (or settings) and a window opens
@@ -76,10 +87,11 @@ It is not published on the AUR yet.
 The overlay is drawn on a Wayland layer-shell surface above the game, and mouse clicks pass straight through
 it. It needs:
 
-- a Wayland desktop with layer-shell (Hyprland, Sway, KDE Plasma; not GNOME) and the package `gtk4-layer-shell`;
+- a Wayland desktop with layer-shell (Hyprland, Sway, niri, KDE Plasma; not GNOME) and the package `gtk4-layer-shell`;
 - the game in **borderless windowed** mode (a fullscreen game hides every overlay);
-- to show only on the game window, Hyprland for now (we read its focus events). On other desktops the overlay
-  shows while the game is connected;
+- to show only on the game window, Hyprland, Sway / i3 and niri (we read their focus events; no permission
+  needed). On other desktops (KDE, and GNOME which has no layer-shell anyway) the overlay shows while the game
+  is connected;
 - permission to read your keyboard and controller for the hold key or button (Wayland apps cannot see them while
   the game has the focus). Add yourself to the `input` group once, then log out and in:
 
@@ -161,7 +173,8 @@ Run only one of the app or `reclutched track` at a time.
 | 1. Stats tracking | Done |
 | 2. Desktop app (UI/UX) | Done in v1.0.0: setup, history, details, live window and settings |
 | 3. Overlay | Done in v1.0.0 (Hyprland tested; other Wayland desktops need testing) |
-| 4. Capturing and clipping | Planned next (will use an existing recorder) |
+| 4. Home, calendar and graphs | Done in v1.1 (also Sway and niri window detection for the overlay) |
+| 5. Capturing and clipping | Planned next (will use an existing recorder) |
 
 ## Project layout
 
