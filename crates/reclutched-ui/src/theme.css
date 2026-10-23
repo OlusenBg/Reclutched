@@ -295,3 +295,11 @@ button.cal-day:hover { filter: brightness(1.2); }
     to { box-shadow: 0 0 9px 2px rgba(229, 48, 60, 0.85); }
 }
 button.cal-day.heat8, .cal-swatch.heat8 { animation: cal-pulse 1.3s ease-in-out infinite alternate; }
+
+/* ---------- graphs ---------- */
+.graph-card { background: #181414; border-radius: 14px; padding: 14px 16px 12px 16px; }
+.graph-name { font-size: 11px; font-weight: 600; letter-spacing: 0.14em; color: #a2989a; }
+.graph-value { font-size: 22px; font-weight: 300; font-feature-settings: "tnum"; color: #e9e3e1; }
+.graph-trend { font-size: 12px; color: #8b817e; }
+.graph-trend.better { color: #5fa371; }
+.graph-trend.worse { color: #d9534f; }

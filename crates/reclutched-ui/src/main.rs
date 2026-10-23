@@ -8,6 +8,7 @@ mod detail;
 mod flow;
 mod focus;
 mod format;
+mod graphs;
 mod history;
 mod keys;
 mod list;
@@ -181,7 +182,7 @@ impl App {
         let graphs = Rc::downgrade(self);
         let on_graphs: Rc<dyn Fn()> = Rc::new(move || {
             if let Some(app) = graphs.upgrade() {
-                app.toast("The graphs are coming in a later step");
+                app.open_graphs();
             }
         });
         let toggle = Rc::downgrade(self);
@@ -589,6 +590,22 @@ impl App {
         self.pages.set_visible_child_name("calendar");
     }
 
+    /// The graphs page.
+    fn open_graphs(self: &Rc<Self>) {
+        let (offset, today) = mainview::local_now();
+        let weak = Rc::downgrade(self);
+        let hooks = graphs::Hooks {
+            on_back: Rc::new(move || {
+                if let Some(app) = weak.upgrade() {
+                    app.pages.set_visible_child_name("main");
+                }
+            }),
+        };
+        let page = graphs::build(self.db_path.clone(), offset, today, hooks);
+        self.set_page("graphs", &page);
+        self.pages.set_visible_child_name("graphs");
+    }
+
     /// Shows the settings as a page inside the window (the back arrow returns to your matches).
     fn open_settings(self: &Rc<Self>) {
         self.open_settings_at(None);
@@ -813,6 +830,10 @@ fn activate(application: &adw::Application, args: &Args) {
             ("calendar", _) => {
                 app.show_main();
                 app.open_calendar();
+            }
+            ("graphs", _) => {
+                app.show_main();
+                app.open_graphs();
             }
             ("settings", _) => {
                 app.show_main();
