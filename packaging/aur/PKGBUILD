@@ -1,7 +1,7 @@
 # Maintainer: OlusenBg
 # Builds the latest `main` branch (the released code).
 pkgname=reclutched-git
-pkgver=1.0.0
+pkgver=1.0.1
 pkgrel=1
 pkgdesc='Calm, local stats tracker for Rocket League (GTK4 app and CLI)'
 arch=('x86_64')

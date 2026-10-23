@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "reclutched-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "reclutched-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "rusqlite",
  "serde",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "reclutched-daemon"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "reclutched-ui"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "gtk4",
