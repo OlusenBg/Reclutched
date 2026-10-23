@@ -16,7 +16,7 @@ struct Option_ {
     text: String,
 }
 
-fn options(db_path: &PathBuf, grain: Grain) -> Vec<Option_> {
+fn options(db_path: &std::path::Path, grain: Grain) -> Vec<Option_> {
     let (offset, today) = local_now();
     Store::open(db_path)
         .and_then(|s| s.period_summaries(grain, offset))
