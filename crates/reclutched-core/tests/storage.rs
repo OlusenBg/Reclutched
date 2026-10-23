@@ -360,3 +360,55 @@ fn periods_group_by_local_day_month_and_year_and_keep_every_match() {
     assert_eq!(store.period_summary("2030-01-01", 0).unwrap(), None);
     assert_eq!(count(&store, "matches"), 5, "summarising deletes nothing");
 }
+
+#[test]
+fn wiping_a_period_removes_its_matches_and_everything_attached() {
+    use reclutched_core::rocketleague::dates::Day;
+    let at = |day: &str| Day::parse(day).unwrap().to_days() * 86_400 + 12 * 3_600;
+    let base = real_match();
+    let mut store = Store::open_in_memory().unwrap();
+    for (i, day) in ["2026-10-23", "2026-10-22", "2026-09-30", "2025-12-31"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut m = base.clone();
+        m.guid = Some(format!("wipe-{i}"));
+        m.ended_at = at(day);
+        m.started_at = m.ended_at - 300;
+        store.save_match(&m).unwrap().expect("a new match");
+    }
+    let players = m_players(&store);
+
+    assert_eq!(store.delete_period("2026-10-23", 0).unwrap(), 1);
+    assert_eq!(count(&store, "matches"), 3);
+    assert_eq!(
+        count(&store, "match_players"),
+        3 * base.players.len() as i64
+    );
+    // October is the 22nd now.
+    assert_eq!(store.delete_period("2026-10", 0).unwrap(), 1);
+    assert_eq!(store.delete_period("2026-10", 0).unwrap(), 0);
+    assert_eq!(count(&store, "matches"), 2);
+    // A whole year, and a key that means nothing.
+    assert_eq!(store.delete_period("2026", 0).unwrap(), 1);
+    assert_eq!(store.delete_period("nonsense", 0).unwrap(), 0);
+    assert_eq!(count(&store, "matches"), 1);
+    // The player names of the last match are still remembered, those of deleted ones are not
+    // (here they are the same people, so they stay).
+    assert_eq!(count(&store, "players"), players);
+
+    assert_eq!(store.delete_everything().unwrap(), 1);
+    for table in [
+        "matches",
+        "match_players",
+        "goals",
+        "player_touches",
+        "players",
+    ] {
+        assert_eq!(count(&store, table), 0, "{table}");
+    }
+}
+
+fn m_players(store: &Store) -> i64 {
+    count(store, "players")
+}

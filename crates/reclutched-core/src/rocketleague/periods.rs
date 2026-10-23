@@ -76,6 +76,15 @@ const MAX_MATCH_SECONDS: i64 = 3_600;
 /// Movement numbers need at least this many samples (ten seconds of play) to count.
 const MIN_MOVEMENT_SAMPLES: i64 = 100;
 
+fn forget_unused_players(conn: &rusqlite::Connection) -> Result<(), StoreError> {
+    conn.execute(
+        "DELETE FROM players WHERE primary_id NOT IN
+         (SELECT primary_id FROM match_players WHERE primary_id IS NOT NULL)",
+        [],
+    )?;
+    Ok(())
+}
+
 impl Store {
     /// Every day, month or year that has matches, newest first.
     pub fn period_summaries(
@@ -120,6 +129,35 @@ impl Store {
         ))?;
         let rows = stmt.query_map(rusqlite::params![utc_offset, key], match_row)?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Deletes every match of one day, month or year (with its players, goals and the rest) and
+    /// returns how many matches went. Names of players you no longer share a match with go too.
+    pub fn delete_period(&mut self, key: &str, utc_offset: i64) -> Result<usize, StoreError> {
+        let Some(grain) = Grain::of_key(key) else {
+            return Ok(0);
+        };
+        let tx = self.conn.transaction()?;
+        let gone = tx.execute(
+            &format!(
+                "DELETE FROM matches
+                 WHERE strftime('{}', ended_at + ?1, 'unixepoch') = ?2",
+                grain.pattern()
+            ),
+            rusqlite::params![utc_offset, key],
+        )?;
+        forget_unused_players(&tx)?;
+        tx.commit()?;
+        Ok(gone)
+    }
+
+    /// Deletes every match and every remembered player. Returns how many matches went.
+    pub fn delete_everything(&mut self) -> Result<usize, StoreError> {
+        let tx = self.conn.transaction()?;
+        let gone = tx.execute("DELETE FROM matches", [])?;
+        tx.execute("DELETE FROM players", [])?;
+        tx.commit()?;
+        Ok(gone)
     }
 
     fn summaries(

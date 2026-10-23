@@ -22,6 +22,7 @@ mod splash;
 mod summary;
 mod tracking;
 mod widgets;
+mod wipe;
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;

@@ -247,7 +247,7 @@ pub fn default_db_path() -> Option<PathBuf> {
 }
 
 pub struct Store {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl Store {

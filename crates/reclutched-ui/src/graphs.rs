@@ -272,11 +272,23 @@ fn day_text(days_since_epoch: i64) -> String {
 }
 
 /// The line chart itself.
-fn chart(points: Vec<Point>, from: i64, to: i64, decimals: usize) -> gtk::DrawingArea {
+fn chart(
+    points: Vec<Point>,
+    from: i64,
+    to: i64,
+    decimals: usize,
+    tone: &'static str,
+) -> gtk::DrawingArea {
     let area = gtk::DrawingArea::builder()
         .content_height(130)
         .hexpand(true)
         .build();
+    // Green while you are improving, red while slipping, a calm gray when it is steady.
+    let line = match tone {
+        "better" => (0.37, 0.64, 0.44),
+        "worse" => (0.85, 0.31, 0.35),
+        _ => (0.62, 0.57, 0.55),
+    };
     area.set_draw_func(move |_, cr, w, h| {
         let (w, h) = (w as f64, h as f64);
         let (left, right, top, bottom) = (6.0, 6.0, 8.0, 18.0);
@@ -312,13 +324,13 @@ fn chart(points: Vec<Point>, from: i64, to: i64, decimals: usize) -> gtk::Drawin
         cr.line_to(x(points[points.len() - 1].at), top + ph);
         cr.close_path();
         let fill = gtk::cairo::LinearGradient::new(0.0, top, 0.0, top + ph);
-        fill.add_color_stop_rgba(0.0, 0.85, 0.2, 0.25, 0.30);
-        fill.add_color_stop_rgba(1.0, 0.85, 0.2, 0.25, 0.0);
+        fill.add_color_stop_rgba(0.0, line.0, line.1, line.2, 0.28);
+        fill.add_color_stop_rgba(1.0, line.0, line.1, line.2, 0.0);
         let _ = cr.set_source(&fill);
         let _ = cr.fill();
 
         cr.set_line_join(gtk::cairo::LineJoin::Round);
-        cr.set_source_rgb(0.85, 0.31, 0.35);
+        cr.set_source_rgb(line.0, line.1, line.2);
         cr.set_line_width(2.0);
         for (i, p) in points.iter().enumerate() {
             if i == 0 {
@@ -400,7 +412,7 @@ fn render(state: &Rc<State>) {
         card.append(&head);
         let (text, tone) = trend_text(m, &points);
         card.append(&label(&text, &["graph-trend", tone]));
-        card.append(&chart(points, from, to, m.decimals));
+        card.append(&chart(points, from, to, m.decimals, tone));
         grid.attach(&card, (i % 2) as i32, (i / 2) as i32, 1, 1);
     }
     state.holder.append(&grid);

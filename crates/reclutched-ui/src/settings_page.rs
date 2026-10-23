@@ -431,6 +431,11 @@ pub fn build(
     rerun.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     data.add(&rerun);
     data_page.add(&data);
+    data_page.add(&crate::wipe::group(
+        parent,
+        db_path.clone(),
+        hooks.toast.clone(),
+    ));
 
     {
         let on_setup = hooks.on_setup.clone();
