@@ -1,7 +1,9 @@
 //! Rocket League: the official local Stats API.
 
+pub mod dates;
 pub mod events;
 pub mod parse;
+pub mod periods;
 pub mod playlist;
 pub mod settings;
 pub mod statsapi;

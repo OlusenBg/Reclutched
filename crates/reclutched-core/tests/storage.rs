@@ -271,3 +271,92 @@ fn recent_form_counts_results_streaks_and_averages() {
         Some(("loss".to_string(), 3))
     );
 }
+
+#[test]
+fn periods_group_by_local_day_month_and_year_and_keep_every_match() {
+    use reclutched_core::rocketleague::dates::Day;
+    use reclutched_core::rocketleague::periods::Grain;
+    use reclutched_core::rocketleague::tracker::MatchResult;
+
+    let at = |day: &str, hour: i64, minute: i64| {
+        Day::parse(day).unwrap().to_days() * 86_400 + hour * 3_600 + minute * 60
+    };
+    let base = real_match();
+    let me = base
+        .players
+        .iter()
+        .find(|p| p.slot == base.my_slot)
+        .unwrap()
+        .clone();
+    let mut store = Store::open_in_memory().unwrap();
+    // (end time, length in seconds, result)
+    let plays = [
+        (at("2026-10-22", 12, 0), 1_200, MatchResult::Win),
+        (at("2026-10-22", 13, 0), 600, MatchResult::Loss),
+        (at("2026-10-23", 12, 0), 900, MatchResult::Win),
+        // 23:30 UTC on the last day of September: already October 1st at UTC+2.
+        (at("2026-09-30", 23, 30), 300, MatchResult::Win),
+        (at("2025-12-31", 12, 0), 5 * 3_600, MatchResult::Abandoned),
+    ];
+    for (i, (ended, length, result)) in plays.into_iter().enumerate() {
+        let mut m = base.clone();
+        m.guid = Some(format!("period-{i}"));
+        m.ended_at = ended;
+        m.started_at = ended - length;
+        m.result = result;
+        store.save_match(&m).unwrap().expect("a new match");
+    }
+
+    // In UTC: the two matches of the 22nd are one day, newest day first.
+    let days = store.period_summaries(Grain::Day, 0).unwrap();
+    let keys: Vec<_> = days.iter().map(|d| d.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["2026-10-23", "2026-10-22", "2026-09-30", "2025-12-31"]
+    );
+    let the22 = &days[1];
+    assert_eq!((the22.matches, the22.wins, the22.losses), (2, 1, 1));
+    assert_eq!(the22.seconds_played, 1_800);
+    assert_eq!(the22.win_rate(), Some(50.0));
+    assert!((the22.avg_goals - me.goals as f64).abs() < 1e-9);
+
+    // A match counts for at most an hour, and a left-early match has no averages.
+    let left_early = days.last().unwrap();
+    assert_eq!((left_early.matches, left_early.abandoned), (1, 1));
+    assert_eq!(left_early.seconds_played, 3_600);
+    assert_eq!(left_early.avg_score, 0.0);
+    assert_eq!(left_early.win_rate(), None);
+
+    // Months and years add the days up.
+    let months = store.period_summaries(Grain::Month, 0).unwrap();
+    assert_eq!(
+        months
+            .iter()
+            .map(|m| (m.key.as_str(), m.matches))
+            .collect::<Vec<_>>(),
+        [("2026-10", 3), ("2026-09", 1), ("2025-12", 1)]
+    );
+    let years = store.period_summaries(Grain::Year, 0).unwrap();
+    assert_eq!(
+        years
+            .iter()
+            .map(|y| (y.key.as_str(), y.matches))
+            .collect::<Vec<_>>(),
+        [("2026", 4), ("2025", 1)]
+    );
+
+    // The time zone moves the late September match into October.
+    let october = store.period_summary("2026-10", 2 * 3_600).unwrap().unwrap();
+    assert_eq!(october.matches, 4);
+    assert_eq!(store.period_summary("2026-09", 2 * 3_600).unwrap(), None);
+
+    // Every match is still there, newest first, for any period.
+    let on_the_22nd = store.matches_in_period("2026-10-22", 0).unwrap();
+    assert_eq!(on_the_22nd.len(), 2);
+    assert!(on_the_22nd[0].ended_at > on_the_22nd[1].ended_at);
+    assert_eq!(store.matches_in_period("2026-10", 0).unwrap().len(), 3);
+    assert_eq!(store.matches_in_period("2026", 0).unwrap().len(), 4);
+    assert!(store.matches_in_period("nonsense", 0).unwrap().is_empty());
+    assert_eq!(store.period_summary("2030-01-01", 0).unwrap(), None);
+    assert_eq!(count(&store, "matches"), 5, "summarising deletes nothing");
+}

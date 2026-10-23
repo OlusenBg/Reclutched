@@ -926,7 +926,7 @@ impl Store {
 }
 
 /// Reads the first ten columns of the `matches` SELECTs above.
-fn match_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MatchRow> {
+pub(crate) fn match_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<MatchRow> {
     let remaining: Option<i64> = r.get(8)?;
     let overtime: Option<bool> = r.get(9)?;
     Ok(MatchRow {

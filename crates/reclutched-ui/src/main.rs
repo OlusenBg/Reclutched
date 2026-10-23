@@ -7,6 +7,7 @@ mod detail;
 mod flow;
 mod focus;
 mod format;
+mod history;
 mod keys;
 mod list;
 mod live;
@@ -16,6 +17,7 @@ mod panel;
 mod settings_page;
 mod setup;
 mod splash;
+mod summary;
 mod tracking;
 mod widgets;
 
@@ -169,6 +171,18 @@ impl App {
                 app.open_settings();
             }
         });
+        let calendar = Rc::downgrade(self);
+        let on_calendar: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(app) = calendar.upgrade() {
+                app.toast("The calendar is coming in the next step");
+            }
+        });
+        let graphs = Rc::downgrade(self);
+        let on_graphs: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(app) = graphs.upgrade() {
+                app.toast("The graphs are coming in a later step");
+            }
+        });
         let toggle = Rc::downgrade(self);
         let on_toggle: Rc<dyn Fn()> = Rc::new(move || {
             if let Some(app) = toggle.upgrade() {
@@ -180,6 +194,8 @@ impl App {
             store,
             default_map_path(),
             on_settings,
+            on_calendar,
+            on_graphs,
             on_toggle,
         );
         self.set_page("main", view.widget.upcast_ref());

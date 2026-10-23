@@ -256,3 +256,15 @@ list.settings-nav > row:hover { background: #1f1919; color: #e9e3e1; }
 list.settings-nav > row:selected { background: rgba(163, 38, 48, 0.16); color: #ffffff; }
 .settings-title { font-size: 26px; font-weight: 300; color: #e9e3e1; }
 .settings-ruler { opacity: 0; }
+
+/* ---------- home, groups and periods ---------- */
+.stripe.neutral { background: #4a4040; }
+.row-score.neutral { color: #8b817e; }
+.home-icon { color: #d9505b; }
+.row-chevron { color: #6f6563; }
+list.match-list > row.home-row { margin-bottom: 8px; }
+.period-title { font-size: 32px; font-weight: 300; color: #e9e3e1; }
+.period-sub { font-size: 13px; color: #a2989a; }
+list.children-list { background: #181414; border-radius: 14px; padding: 6px; }
+list.children-list > row.match-row { background: transparent; border-radius: 10px; padding: 10px 6px 10px 10px; }
+list.children-list > row.match-row:hover { background: #1f1919; }

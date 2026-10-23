@@ -1,19 +1,18 @@
-//! The match list on the left: one calm row per match with a thin colour stripe for the result.
+//! The list on the left: Home, today's matches, one row per earlier day, and groups for months and
+//! years (see `history.rs` for what goes where). Rows have a thin colour stripe.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use reclutched_core::rocketleague::playlist::PlaylistMap;
-use reclutched_core::rocketleague::storage::MatchRow;
 
-use crate::format::{clock_text, mode_name, result_class, score_text, when_label};
+use crate::history::{Entry, Target};
 
-pub struct MatchList {
+pub struct HistoryList {
     pub widget: gtk::ScrolledWindow,
     list: gtk::ListBox,
-    /// The match id of every row, in the same order as the rows.
-    ids: RefCell<Vec<i64>>,
+    /// The entry behind every row, in the same order as the rows.
+    entries: RefCell<Vec<Entry>>,
     /// True while we rebuild the list, so clearing it is not mistaken for a click.
     rebuilding: Cell<bool>,
 }
@@ -28,56 +27,79 @@ fn label(text: &str, classes: &[&str]) -> gtk::Label {
         .build()
 }
 
-fn row_widget(row: &MatchRow, names: &PlaylistMap) -> gtk::ListBoxRow {
+/// One row for any entry. Also used for the lists inside a day, month or year page.
+pub fn entry_row(entry: &Entry) -> gtk::ListBoxRow {
     let stripe = gtk::Box::builder()
-        .css_classes(["stripe", result_class(&row.result)])
+        .css_classes(["stripe", entry.tone.css_class()])
         .width_request(4)
         .build();
 
-    let mode = label(&mode_name(names, row.playlist_id), &["row-mode"]);
-    let when = label(&when_label(row.ended_at), &["row-when"]);
     let text = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(2)
         .hexpand(true)
         .valign(gtk::Align::Center)
         .build();
-    text.append(&mode);
-    text.append(&when);
-
-    // A short note when something is unusual about the match.
-    let note = if let Some(clock) = row.abandoned_at {
-        Some(format!("Left with {} on the clock", clock_text(clock)))
-    } else if row.overtime {
-        Some("Overtime".to_string())
-    } else {
-        None
-    };
-    if let Some(note) = note {
-        text.append(&label(&note, &["row-note"]));
+    text.append(&label(&entry.title, &["row-mode"]));
+    if !entry.subtitle.is_empty() {
+        text.append(&label(&entry.subtitle, &["row-when"]));
     }
 
-    let score = gtk::Label::builder()
-        .label(score_text(row))
-        .css_classes(["row-score", result_class(&row.result)])
-        .valign(gtk::Align::Center)
-        .build();
-
     let content = gtk::Box::builder().spacing(14).build();
-    content.append(&stripe);
-    content.append(&text);
-    content.append(&score);
     content.set_margin_end(16);
+    content.set_margin_start(i32::from(entry.depth) * 22);
+    if entry.target == Target::Home {
+        content.append(
+            &gtk::Image::builder()
+                .icon_name("go-home-symbolic")
+                .valign(gtk::Align::Center)
+                .css_classes(["home-icon"])
+                .build(),
+        );
+    } else {
+        content.append(&stripe);
+    }
+    content.append(&text);
+    if !entry.right.is_empty() {
+        content.append(
+            &gtk::Label::builder()
+                .label(&entry.right)
+                .css_classes(["row-score", entry.tone.css_class()])
+                .valign(gtk::Align::Center)
+                .build(),
+        );
+    }
+    if let Some(group) = &entry.group {
+        content.append(
+            &gtk::Image::builder()
+                .icon_name(if group.expanded {
+                    "pan-down-symbolic"
+                } else {
+                    "pan-end-symbolic"
+                })
+                .valign(gtk::Align::Center)
+                .css_classes(["row-chevron"])
+                .build(),
+        );
+    }
 
+    let mut classes = vec!["match-row"];
+    if entry.target == Target::Home {
+        classes.push("home-row");
+    }
     gtk::ListBoxRow::builder()
         .child(&content)
-        .css_classes(["match-row"])
+        .css_classes(classes)
         .build()
 }
 
-impl MatchList {
-    /// `on_select` is called with the match id when the user picks a row.
-    pub fn new(on_select: impl Fn(i64) + 'static) -> Rc<Self> {
+impl HistoryList {
+    /// `on_select` is called when the user picks a row; `on_toggle` with a group's key when a
+    /// month or year row is clicked (to open or close it).
+    pub fn new(
+        on_select: impl Fn(Target) + 'static,
+        on_toggle: impl Fn(String) + 'static,
+    ) -> Rc<Self> {
         let list = gtk::ListBox::builder()
             .selection_mode(gtk::SelectionMode::Single)
             .css_classes(["match-list"])
@@ -90,50 +112,57 @@ impl MatchList {
         let this = Rc::new(Self {
             widget,
             list,
-            ids: RefCell::new(Vec::new()),
+            entries: RefCell::new(Vec::new()),
             rebuilding: Cell::new(false),
         });
-        let weak = Rc::downgrade(&this);
-        this.list.connect_row_selected(move |_, row| {
-            let (Some(this), Some(row)) = (weak.upgrade(), row) else {
-                return;
-            };
-            if this.rebuilding.get() {
-                return;
-            }
-            let id = usize::try_from(row.index())
+        let entry_at = |this: &Rc<Self>, row: &gtk::ListBoxRow| {
+            usize::try_from(row.index())
                 .ok()
-                .and_then(|i| this.ids.borrow().get(i).copied());
-            if let Some(id) = id {
-                on_select(id);
-            }
-        });
+                .and_then(|i| this.entries.borrow().get(i).cloned())
+        };
+        {
+            let weak = Rc::downgrade(&this);
+            this.list.connect_row_selected(move |_, row| {
+                let (Some(this), Some(row)) = (weak.upgrade(), row) else {
+                    return;
+                };
+                if this.rebuilding.get() {
+                    return;
+                }
+                if let Some(entry) = entry_at(&this, row) {
+                    on_select(entry.target);
+                }
+            });
+        }
+        {
+            let weak = Rc::downgrade(&this);
+            this.list.connect_row_activated(move |_, row| {
+                let Some(this) = weak.upgrade() else { return };
+                if let Some(group) = entry_at(&this, row).and_then(|e| e.group) {
+                    on_toggle(group.key);
+                }
+            });
+        }
         this
     }
 
-    /// Fills the list and selects `keep` if it is still there, otherwise the newest match.
-    /// Returns the id that ended up selected.
-    pub fn set_rows(
-        &self,
-        rows: &[MatchRow],
-        names: &PlaylistMap,
-        keep: Option<i64>,
-    ) -> Option<i64> {
+    /// Fills the list and highlights the row for `selected`. When that row is not in the list
+    /// (for example a match from another day, opened from a page) nothing is highlighted.
+    pub fn set_entries(&self, entries: Vec<Entry>, selected: &Target) {
         self.rebuilding.set(true);
         self.list.remove_all();
-        *self.ids.borrow_mut() = rows.iter().map(|r| r.id).collect();
-        for row in rows {
-            self.list.append(&row_widget(row, names));
+        for entry in &entries {
+            self.list.append(&entry_row(entry));
         }
-        let wanted = keep
-            .and_then(|id| rows.iter().position(|r| r.id == id))
-            .or(if rows.is_empty() { None } else { Some(0) });
-        if let Some(i) = wanted {
-            if let Some(row) = self.list.row_at_index(i as i32) {
-                self.list.select_row(Some(&row));
-            }
+        let row = entries
+            .iter()
+            .position(|e| e.target == *selected)
+            .and_then(|i| self.list.row_at_index(i as i32));
+        match row {
+            Some(row) => self.list.select_row(Some(&row)),
+            None => self.list.unselect_all(),
         }
+        *self.entries.borrow_mut() = entries;
         self.rebuilding.set(false);
-        wanted.map(|i| rows[i].id)
     }
 }

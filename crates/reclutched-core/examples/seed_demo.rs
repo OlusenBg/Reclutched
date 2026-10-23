@@ -2,6 +2,7 @@
 //!
 //!     cargo run -p reclutched-core --example seed_demo -- /tmp/demo.db
 //!     cargo run -p reclutched-core --example seed_demo -- /tmp/demo.db 500   # plus 500 more
+//!     cargo run -p reclutched-core --example seed_demo -- /tmp/demo.db history   # 14 months of play
 //!
 //! Everything here is invented (names, numbers); it goes through the real `Store`, so it also
 //! checks that the schema accepts realistic data.
@@ -371,6 +372,93 @@ fn main() {
     m.ball_max_speed = None;
     m.team_empty_overlap = None;
     store.save_match(&m).unwrap();
+
+    // `history`: about 14 months of play, busy and quiet days, with stats that slowly improve
+    // (to try the day/month/year list, the calendar and the graphs).
+    if std::env::args().nth(2).as_deref() == Some("history") {
+        let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let days = 430;
+        let mut n = 0;
+        for d in (1..days).rev() {
+            // 0 = quiet, up to 1 = a very long day.
+            let roll = next();
+            let count = if roll < 0.40 {
+                0
+            } else if roll < 0.75 {
+                3 + (next() * 6.0) as i64
+            } else if roll < 0.95 {
+                10 + (next() * 20.0) as i64
+            } else {
+                60 + (next() * 40.0) as i64
+            };
+            // How far along the 14 months this day is: 0 at the start, 1 today.
+            let progress = 1.0 - d as f64 / days as f64;
+            let day_start = (now - d * 86_400) / 86_400 * 86_400 + 9 * 3_600;
+            for k in 0..count {
+                let length = 300 + (next() * 120.0) as i64;
+                let ended = day_start + k * 520;
+                let win_chance = 0.42 + 0.22 * progress;
+                let result = if next() < 0.08 {
+                    MatchResult::Abandoned
+                } else if next() < win_chance {
+                    MatchResult::Win
+                } else {
+                    MatchResult::Loss
+                };
+                let goals = (0.6 + 1.0 * progress + next() * 1.4) as i64;
+                let mut m = base(
+                    &format!("HIST{n:028}"),
+                    ended,
+                    [3, 11, 13, 1][(k % 4) as usize],
+                    "Stadium_P",
+                    result,
+                    match result {
+                        MatchResult::Win => [2 + goals % 3, goals % 2],
+                        MatchResult::Loss => [goals % 2, 2 + goals % 3],
+                        MatchResult::Abandoned => [1, 1],
+                    },
+                    k % 9 == 0,
+                    vec![
+                        player(
+                            0,
+                            "Zed",
+                            0,
+                            true,
+                            [
+                                (200.0 + 260.0 * progress + next() * 150.0) as i64,
+                                goals,
+                                goals + 1 + (next() * 3.0) as i64,
+                                (next() * 2.0) as i64,
+                                (next() * 2.0 + 0.8 * progress) as i64,
+                                20,
+                                9,
+                                (next() * 2.0) as i64,
+                            ],
+                            None,
+                        ),
+                        player(1, "Nova", 1, false, [200, 1, 2, 0, 1, 15, 7, 0], None),
+                    ],
+                );
+                m.started_at = ended - length;
+                m.my_possession_pct = Some(46.0 + 8.0 * progress + next() * 8.0);
+                m.movement = vec![movement(
+                    0,
+                    38.0 + 12.0 * progress + next() * 8.0,
+                    30.0 - 10.0 * progress + next() * 6.0,
+                    46.0 + 6.0 * progress + next() * 4.0,
+                )];
+                store.save_match(&m).unwrap();
+                n += 1;
+            }
+        }
+        println!("... plus {n} matches over {days} days (history)");
+    }
 
     // Optionally lots of history, to check the list stays fast.
     if let Some(extra) = std::env::args().nth(2).and_then(|n| n.parse::<i64>().ok()) {
