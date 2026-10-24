@@ -1,7 +1,6 @@
 //! What the left side of the window lists, as plain data (no widgets), so the rules can be tested:
 //!
-//! - **Home** first: today's numbers.
-//! - **Today**: every match on its own row.
+//! - **Today** first: one group with the day's numbers, and every match of the day inside it.
 //! - **Earlier this month**: one row per day.
 //! - **Earlier months of this year**: one group per month, with its days inside.
 //! - **Earlier years**: one group per year, with only its months inside (no days).
@@ -20,7 +19,6 @@ use crate::format::{clock_text, result_class, score_text};
 /// What a row opens on the right.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Home,
     Match(i64),
     /// A day ("2026-10-23"), a month ("2026-10") or a year ("2026").
     Period(String),
@@ -203,7 +201,7 @@ pub fn build_entries(input: &Inputs<'_>) -> Vec<Entry> {
     let today = input.today;
     let mut out = Vec::new();
 
-    // Home: today in one line.
+    // Today: one group; every match of the day sits inside it.
     let (won, lost) =
         input
             .today_matches
@@ -213,17 +211,17 @@ pub fn build_entries(input: &Inputs<'_>) -> Vec<Entry> {
                 "loss" => (w, l + 1),
                 _ => (w, l),
             });
+    let today_key = today.key();
+    let today_group = format!("d:{today_key}");
+    let today_open = input.expanded.contains(&today_group);
     out.push(Entry {
-        target: Target::Home,
+        target: Target::Period(today_key.clone()),
         depth: 0,
-        title: "Home".to_string(),
+        title: "Today".to_string(),
         subtitle: if input.today_matches.is_empty() {
-            "Nothing played today yet".to_string()
+            "Nothing played yet".to_string()
         } else {
-            format!(
-                "Today  \u{00B7}  {}",
-                matches_word(input.today_matches.len() as i64)
-            )
+            matches_word(input.today_matches.len() as i64)
         },
         right: if input.today_matches.is_empty() {
             String::new()
@@ -236,15 +234,19 @@ pub fn build_entries(input: &Inputs<'_>) -> Vec<Entry> {
             std::cmp::Ordering::Equal if won > 0 => Tone::Abandoned,
             std::cmp::Ordering::Equal => Tone::Neutral,
         },
-        group: None,
+        group: Some(Group {
+            key: today_group,
+            expanded: today_open,
+        }),
     });
-
-    // Today: every match.
-    for row in input.today_matches {
-        out.push(match_entry(row, input.mode_name, input.when));
+    if today_open {
+        for row in input.today_matches {
+            let mut entry = match_entry(row, input.mode_name, input.when);
+            entry.depth = 1;
+            out.push(entry);
+        }
     }
 
-    let today_key = today.key();
     let this_month = today.month_key();
     let this_year = format!("{:04}", today.year);
 
@@ -420,6 +422,7 @@ mod tests {
             avg_assists: 0.0,
             avg_saves: 0.0,
             avg_shots: 0.0,
+            avg_demos: 0.0,
             avg_possession: None,
             avg_boost: None,
             avg_boost_empty: None,
@@ -489,13 +492,13 @@ mod tests {
     }
 
     #[test]
-    fn the_list_has_home_today_then_days_then_month_and_year_groups() {
+    fn the_list_has_a_today_group_then_days_then_month_and_year_groups() {
         assert_eq!(
-            titles(&[]),
+            titles(&["d:2026-10-23"]),
             vec![
-                t(0, "Home"),
-                t(0, "Casual"),
-                t(0, "Casual"),
+                t(0, "Today"),
+                t(1, "Casual"),
+                t(1, "Casual"),
                 t(0, "Yesterday"),
                 t(0, "Wed, Oct 21"),
                 t(0, "Sat, Oct 3"),
@@ -510,8 +513,11 @@ mod tests {
     #[test]
     fn an_open_month_shows_its_days_and_an_open_year_only_its_months() {
         let rows = titles(&["m:2026-09", "y:2025", "y:2024"]);
+        // Today is closed here: only its own row, no loose matches.
+        assert_eq!(rows[0], t(0, "Today"));
+        assert_eq!(rows[1], t(0, "Yesterday"));
         assert_eq!(
-            &rows[6..],
+            &rows[4..],
             &[
                 t(0, "September 2026"),
                 t(1, "Wed, Sep 30"),
@@ -545,8 +551,15 @@ mod tests {
             mode_name: &|_| String::new(),
             when: &|_| String::new(),
         });
-        assert_eq!(entries[0].target, Target::Home);
-        assert_eq!(entries[0].subtitle, "Nothing played today yet");
+        assert_eq!(entries[0].target, Target::Period("2026-10-23".into()));
+        assert_eq!(entries[0].subtitle, "Nothing played yet");
+        assert_eq!(
+            entries[0].group,
+            Some(Group {
+                key: "d:2026-10-23".into(),
+                expanded: false
+            })
+        );
         let yesterday = &entries[1];
         assert_eq!(yesterday.target, Target::Period("2026-10-22".into()));
         assert_eq!(

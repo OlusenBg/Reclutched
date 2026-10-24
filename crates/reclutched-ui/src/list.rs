@@ -1,4 +1,4 @@
-//! The list on the left: Home, today's matches, one row per earlier day, and groups for months and
+//! The list on the left: a Today group with its matches, one row per earlier day, and groups for months and
 //! years (see `history.rs` for what goes where). Rows have a thin colour stripe.
 
 use std::cell::{Cell, RefCell};
@@ -48,17 +48,7 @@ pub fn entry_row(entry: &Entry) -> gtk::ListBoxRow {
     let content = gtk::Box::builder().spacing(14).build();
     content.set_margin_end(16);
     content.set_margin_start(i32::from(entry.depth) * 22);
-    if entry.target == Target::Home {
-        content.append(
-            &gtk::Image::builder()
-                .icon_name("go-home-symbolic")
-                .valign(gtk::Align::Center)
-                .css_classes(["home-icon"])
-                .build(),
-        );
-    } else {
-        content.append(&stripe);
-    }
+    content.append(&stripe);
     content.append(&text);
     if !entry.right.is_empty() {
         content.append(
@@ -83,13 +73,9 @@ pub fn entry_row(entry: &Entry) -> gtk::ListBoxRow {
         );
     }
 
-    let mut classes = vec!["match-row"];
-    if entry.target == Target::Home {
-        classes.push("home-row");
-    }
     gtk::ListBoxRow::builder()
         .child(&content)
-        .css_classes(classes)
+        .css_classes(["match-row"])
         .build()
 }
 

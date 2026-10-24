@@ -303,3 +303,21 @@ button.cal-day.heat8, .cal-swatch.heat8 { animation: cal-pulse 1.3s ease-in-out 
 .graph-trend { font-size: 12px; color: #8b817e; }
 .graph-trend.better { color: #5fa371; }
 .graph-trend.worse { color: #d9534f; }
+
+/* ---------- advanced match page ---------- */
+.adv-title { font-size: 22px; font-weight: 300; color: #e9e3e1; margin-top: 38px; margin-bottom: 10px; }
+
+/* ---------- main menu ---------- */
+.welcome-empty { font-size: 16px; color: #8b817e; }
+.info-card { background: #181414; border-radius: 16px; padding: 18px 20px 20px 20px; }
+.card-title { font-size: 20px; font-weight: 300; color: #e9e3e1; }
+.card-sub { font-size: 11px; letter-spacing: 0.1em; color: #6f6563; }
+.carousel-dot { min-width: 7px; min-height: 7px; border-radius: 4px; background: #3a3333; }
+.carousel-dot.current { background: #c2303c; }
+.gallery-thumb { background: #181414; border-radius: 12px; }
+.gallery-play { color: #c2303c; }
+.gallery-caption { font-size: 12px; color: #8b817e; }
+.graph-trend.work { color: #ee9438; }
+/* top bar */
+.top-tabs button { padding: 6px 22px; font-weight: 500; }
+.top-tabs button:checked { background: rgba(163, 38, 48, 0.28); color: #ffffff; }

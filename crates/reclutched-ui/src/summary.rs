@@ -1,4 +1,4 @@
-//! The page for a day, a month, a year or Home (today): the numbers in a calm layout and, below,
+//! The page for a day (today too), a month or a year: the numbers in a calm layout and, below,
 //! what is inside it (a day's matches, a month's days, a year's months) to click through.
 
 use std::rc::Rc;

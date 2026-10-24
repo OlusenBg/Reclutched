@@ -5,23 +5,28 @@
 
 mod calendar;
 mod capture;
+mod carousel;
 mod detail;
 mod flow;
 mod focus;
 mod format;
-mod graphs;
+mod gallery;
 mod history;
+mod insights;
 mod keys;
 mod list;
 mod live;
 mod mainview;
+mod menu;
 mod overlay;
 mod panel;
 mod settings_page;
 mod setup;
+mod shell;
 mod splash;
 mod summary;
 mod tracking;
+mod trends;
 mod widgets;
 mod wipe;
 
@@ -101,7 +106,7 @@ struct App {
     tracking: RefCell<Option<tracking::Tracking>>,
     /// Keep the current screens alive while they are shown.
     wizard: RefCell<Option<Rc<setup::Wizard>>>,
-    main_view: RefCell<Option<Rc<mainview::MainView>>>,
+    main_view: RefCell<Option<Rc<shell::Shell>>>,
     /// True once the timer that reads tracker news is running.
     watching: Cell<bool>,
     /// The live window (modes "2 Screens" and "Both"), while a match is shown.
@@ -195,25 +200,19 @@ impl App {
                 app.open_calendar();
             }
         });
-        let graphs = Rc::downgrade(self);
-        let on_graphs: Rc<dyn Fn()> = Rc::new(move || {
-            if let Some(app) = graphs.upgrade() {
-                app.open_graphs();
-            }
-        });
         let toggle = Rc::downgrade(self);
         let on_toggle: Rc<dyn Fn()> = Rc::new(move || {
             if let Some(app) = toggle.upgrade() {
                 app.toggle_tracking();
             }
         });
-        let view = mainview::MainView::new(
+        let view = shell::Shell::new(
             &self.window,
             store,
             default_map_path(),
+            self.settings_path.clone(),
             on_settings,
             on_calendar,
-            on_graphs,
             on_toggle,
         );
         self.set_page("main", view.widget.upcast_ref());
@@ -709,22 +708,6 @@ impl App {
         self.pages.set_visible_child_name("calendar");
     }
 
-    /// The graphs page.
-    fn open_graphs(self: &Rc<Self>) {
-        let (offset, today) = mainview::local_now();
-        let weak = Rc::downgrade(self);
-        let hooks = graphs::Hooks {
-            on_back: Rc::new(move || {
-                if let Some(app) = weak.upgrade() {
-                    app.pages.set_visible_child_name("main");
-                }
-            }),
-        };
-        let page = graphs::build(self.db_path.clone(), offset, today, hooks);
-        self.set_page("graphs", &page);
-        self.pages.set_visible_child_name("graphs");
-    }
-
     /// Shows the settings as a page inside the window (the back arrow returns to your matches).
     fn open_settings(self: &Rc<Self>) {
         self.open_settings_at(None);
@@ -986,19 +969,28 @@ fn activate(application: &adw::Application, args: &Args) {
         match (name, page_step(name)) {
             ("splash", _) => {}
             ("main", _) => app.show_main(),
+            ("tracking", _) => {
+                app.show_main();
+                if let Some(view) = app.main_view.borrow().as_ref() {
+                    view.show(shell::Tab::Tracking);
+                }
+            }
+            ("capturing", _) => {
+                app.show_main();
+                if let Some(view) = app.main_view.borrow().as_ref() {
+                    view.show(shell::Tab::Capturing);
+                }
+            }
+            // The newest match with one of its tabs ("main-overview", "main-advanced").
             (tab, _) if tab.starts_with("main-") => {
                 app.show_main();
                 if let Some(view) = app.main_view.borrow().as_ref() {
-                    view.show_tab(&tab["main-".len()..]);
+                    view.show_match_tab(&tab["main-".len()..]);
                 }
             }
             ("calendar", _) => {
                 app.show_main();
                 app.open_calendar();
-            }
-            ("graphs", _) => {
-                app.show_main();
-                app.open_graphs();
             }
             ("settings", _) => {
                 app.show_main();

@@ -17,7 +17,6 @@ use crate::format::{mode_name, summary_text, when_label};
 use crate::history::{self, Inputs, Target};
 use crate::list::HistoryList;
 use crate::summary::{Page, SummaryView};
-use crate::tracking::Status;
 
 const POLL_SECONDS: u32 = 2;
 /// Window width (in pixels) under which the list and the details are shown one at a time.
@@ -39,8 +38,6 @@ pub struct MainView {
     header_title: gtk::Stack,
     period_title: adw::WindowTitle,
     title: adw::WindowTitle,
-    light: StatusLight,
-    empty_light: StatusLight,
     /// (number of matches, newest match id) at the last reload: if it changes, we reload.
     seen: Cell<(i64, i64)>,
     /// The day it was at the last reload: after midnight "today" is another day.
@@ -76,74 +73,12 @@ pub fn local_now() -> (i64, Day) {
     }
 }
 
-fn icon_button(icon: &str, tooltip: &str, on_click: &Rc<dyn Fn()>) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .icon_name(icon)
-        .tooltip_text(tooltip)
-        .css_classes(["flat"])
-        .build();
-    let on_click = on_click.clone();
-    button.connect_clicked(move |_| on_click());
-    button
-}
-
-fn gear_button(on_settings: &Rc<dyn Fn()>) -> gtk::Button {
-    let button = gtk::Button::builder()
-        .icon_name("emblem-system-symbolic")
-        .tooltip_text("Settings")
-        .css_classes(["flat"])
-        .build();
-    let on_settings = on_settings.clone();
-    button.connect_clicked(move |_| on_settings());
-    button
-}
-
-/// A coloured dot and a few words that show whether tracking is running. Clicking toggles it.
-struct StatusLight {
-    button: gtk::Button,
-    dot: gtk::Box,
-    label: gtk::Label,
-}
-
-impl StatusLight {
-    fn new(on_toggle: Rc<dyn Fn()>) -> Self {
-        let dot = gtk::Box::builder()
-            .css_classes(["status-dot", "off"])
-            .valign(gtk::Align::Center)
-            .build();
-        let label = gtk::Label::builder().css_classes(["status-text"]).build();
-        let row = gtk::Box::builder().spacing(8).build();
-        row.append(&dot);
-        row.append(&label);
-        let button = gtk::Button::builder()
-            .child(&row)
-            .css_classes(["flat", "status-button"])
-            .build();
-        button.connect_clicked(move |_| on_toggle());
-        let light = Self { button, dot, label };
-        light.set(Status::Off);
-        light
-    }
-
-    fn set(&self, status: Status) {
-        self.label.set_text(status.label());
-        self.button.set_tooltip_text(Some(status.tooltip()));
-        for class in ["off", "waiting", "active"] {
-            self.dot.remove_css_class(class);
-        }
-        self.dot.add_css_class(status.css_class());
-    }
-}
-
 impl MainView {
     pub fn new(
         window: &adw::ApplicationWindow,
         store: Rc<Store>,
         names_path: Option<PathBuf>,
         on_settings: Rc<dyn Fn()>,
-        on_calendar: Rc<dyn Fn()>,
-        on_graphs: Rc<dyn Fn()>,
-        on_toggle_tracking: Rc<dyn Fn()>,
     ) -> Rc<Self> {
         let names = names_path
             .as_deref()
@@ -188,17 +123,17 @@ impl MainView {
         content.set_visible_child_name("period");
 
         let title = adw::WindowTitle::new("Matches", "");
-        let light = StatusLight::new(on_toggle_tracking.clone());
-        let empty_light = StatusLight::new(on_toggle_tracking);
-        let side_header = adw::HeaderBar::new();
+        // The window's top bar belongs to the shell; these two only carry the back arrow when
+        // the window is narrow, plus a title.
+        let side_header = adw::HeaderBar::builder()
+            .show_start_title_buttons(false)
+            .show_end_title_buttons(false)
+            .css_classes(["flat"])
+            .build();
         side_header.set_title_widget(Some(&title));
         let side = adw::ToolbarView::new();
         side.add_top_bar(&side_header);
         side.set_content(Some(&list.widget));
-        // The tracking light lives under the list, so it never competes with the title.
-        let footer = gtk::Box::builder().css_classes(["sidebar-footer"]).build();
-        footer.append(&light.button);
-        side.add_bottom_bar(&footer);
         let side_page = adw::NavigationPage::builder()
             .title("Matches")
             .child(&side)
@@ -215,20 +150,12 @@ impl MainView {
         header_title.add_named(&switcher, Some("match"));
         header_title.add_named(&period_title, Some("period"));
         header_title.set_visible_child_name("period");
-        let main_header = adw::HeaderBar::new();
+        let main_header = adw::HeaderBar::builder()
+            .show_start_title_buttons(false)
+            .show_end_title_buttons(false)
+            .css_classes(["flat"])
+            .build();
         main_header.set_title_widget(Some(&header_title));
-        // From the right: settings, the calendar, the graphs.
-        main_header.pack_end(&gear_button(&on_settings));
-        main_header.pack_end(&icon_button(
-            "x-office-calendar-symbolic",
-            "Calendar: which days you played",
-            &on_calendar,
-        ));
-        main_header.pack_end(&icon_button(
-            "utilities-system-monitor-symbolic",
-            "Graphs: how you are improving",
-            &on_graphs,
-        ));
         let main = adw::ToolbarView::new();
         main.add_top_bar(&main_header);
         main.set_content(Some(&content));
@@ -260,7 +187,7 @@ impl MainView {
         let status = adw::StatusPage::builder()
             .title("No matches yet")
             .description(
-                "Play a match with Rocket League running. It appears here when the match ends.\nTracking has to be on (top left), and the game's Stats API enabled.",
+                "Play a match with Rocket League running. It appears here when the match ends.\nTracking has to be on (the light next to the tabs), and the game's Stats API enabled.",
             )
             .build();
         let setup_button = gtk::Button::builder()
@@ -273,12 +200,7 @@ impl MainView {
             setup_button.connect_clicked(move |_| on_settings());
         }
         status.set_child(Some(&setup_button));
-        let empty_header = adw::HeaderBar::new();
-        empty_header.pack_start(&empty_light.button);
-        empty_header.pack_end(&gear_button(&on_settings));
-        let empty = adw::ToolbarView::new();
-        empty.add_top_bar(&empty_header);
-        empty.set_content(Some(&status));
+        let empty = status;
 
         let widget = gtk::Stack::builder()
             .transition_type(gtk::StackTransitionType::Crossfade)
@@ -299,11 +221,9 @@ impl MainView {
             header_title,
             period_title,
             title,
-            light,
-            empty_light,
             seen: Cell::new((-1, -1)),
             seen_day: RefCell::new(String::new()),
-            selection: RefCell::new(Target::Home),
+            selection: RefCell::new(Target::Period(local_now().1.key())),
             expanded: RefCell::new(HashSet::new()),
         });
         *weak_self.borrow_mut() = Some(Rc::downgrade(&this));
@@ -322,15 +242,16 @@ impl MainView {
         this
     }
 
+    /// Developer helper for screenshots: opens the newest match.
+    pub fn select_newest_match(&self) {
+        if let Ok(Some(id)) = self.store.latest_match_id() {
+            self.select(Target::Match(id));
+        }
+    }
+
     /// Developer helper for screenshots: picks a detail tab by name.
     pub fn show_tab(&self, name: &str) {
         self.detail.stack.set_visible_child_name(name);
-    }
-
-    /// Updates the status light (in both headers).
-    pub fn set_status(&self, status: Status) {
-        self.light.set(status);
-        self.empty_light.set(status);
     }
 
     fn state(&self) -> (i64, i64) {
@@ -360,7 +281,7 @@ impl MainView {
 
         if wins + losses + abandoned == 0 {
             self.widget.set_visible_child_name("empty");
-            *self.selection.borrow_mut() = Target::Home;
+            *self.selection.borrow_mut() = Target::Period(local_now().1.key());
             return;
         }
         self.widget.set_visible_child_name("split");
@@ -372,6 +293,12 @@ impl MainView {
     /// Builds the left list from the database.
     fn rebuild_list(&self) {
         let (offset, today) = local_now();
+        // A new day starts with its Today group open.
+        if *self.seen_day.borrow() != today.key() {
+            self.expanded
+                .borrow_mut()
+                .insert(format!("d:{}", today.key()));
+        }
         *self.seen_day.borrow_mut() = today.key();
         let today_matches = self
             .store
@@ -433,11 +360,7 @@ impl MainView {
     fn show_target(&self, target: &Target) {
         match target {
             Target::Match(id) => self.show_match(*id),
-            Target::Home => {
-                let (_, today) = local_now();
-                self.show_period(&today.key(), true);
-            }
-            Target::Period(key) => self.show_period(key, false),
+            Target::Period(key) => self.show_period(key),
         }
     }
 
@@ -448,9 +371,10 @@ impl MainView {
         self.header_title.set_visible_child_name("match");
     }
 
-    /// The page of a day, month or year; for Home it is today.
-    fn show_period(&self, key: &str, home: bool) {
+    /// The page of a day (today too), a month or a year.
+    fn show_period(&self, key: &str) {
         let (offset, today) = local_now();
+        let home = key == today.key();
         let summary = self.store.period_summary(key, offset).ok().flatten();
         let names = self.names.borrow();
         let matches = if key.len() == 10 {
@@ -484,11 +408,7 @@ impl MainView {
             &when_label,
         );
         drop(names);
-        let heading = if home {
-            "Today".to_string()
-        } else {
-            history::period_title(key, today)
-        };
+        let heading = history::period_title(key, today);
         let page = Page {
             heading: heading.clone(),
             subtitle: history::period_subtitle(key, children.len()),

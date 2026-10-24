@@ -1,5 +1,5 @@
-//! The right side: everything we stored about one match, in four calm tabs.
-//! Overview first; the other tabs are where you go looking for more.
+//! The right side: everything we stored about one match, in two calm tabs.
+//! Overview first; Advanced is one scrollable page of titled sections (Players, Goals, Movement).
 
 use adw::prelude::*;
 use reclutched_core::rocketleague::playlist::PlaylistMap;
@@ -33,17 +33,41 @@ impl DetailView {
             .transition_type(gtk::StackTransitionType::Crossfade)
             .transition_duration(160)
             .build();
-        let pages = [
-            ("overview", "Overview"),
-            ("players", "Players"),
-            ("goals", "Goals"),
-            ("movement", "Movement"),
-        ];
-        let boxes: Vec<gtk::Box> = pages.iter().map(|_| vbox(0)).collect();
-        for ((name, title), content) in pages.iter().zip(&boxes) {
-            stack.add_titled(&scroll_page(content), Some(name), title);
+        let overview = vbox(0);
+        stack.add_titled(&scroll_page(&overview), Some("overview"), "Overview");
+
+        // Advanced: three titled sections on one page, with links that jump to them.
+        let advanced = vbox(0);
+        let (players, goals, movement) = (vbox(0), vbox(0), vbox(0));
+        let titles: Vec<gtk::Label> = ["Players", "Goals", "Movement"]
+            .iter()
+            .map(|t| label(t, &["adv-title"]))
+            .collect();
+        let jump = gtk::Box::builder()
+            .css_classes(["linked"])
+            .halign(gtk::Align::Start)
+            .margin_bottom(6)
+            .build();
+        advanced.append(&jump);
+        for (title, content) in titles.iter().zip([&players, &goals, &movement]) {
+            advanced.append(title);
+            advanced.append(content);
         }
-        let [overview, players, goals, movement]: [gtk::Box; 4] = boxes.try_into().unwrap();
+        let scroller = scroll_page(&advanced);
+        for title in &titles {
+            let button = gtk::Button::builder().label(title.label()).build();
+            let (title, advanced, scroller) = (title.clone(), advanced.clone(), scroller.clone());
+            button.connect_clicked(move |_| {
+                if let Some(point) =
+                    title.compute_point(&advanced, &gtk::graphene::Point::new(0.0, 0.0))
+                {
+                    // The page has a margin above its content that the title's position leaves out.
+                    scroller.vadjustment().set_value(f64::from(point.y()));
+                }
+            });
+            jump.append(&button);
+        }
+        stack.add_titled(&scroller, Some("advanced"), "Advanced");
         Self {
             stack,
             overview,

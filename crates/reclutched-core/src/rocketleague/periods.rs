@@ -52,6 +52,7 @@ pub struct PeriodSummary {
     pub avg_assists: f64,
     pub avg_saves: f64,
     pub avg_shots: f64,
+    pub avg_demos: f64,
     /// Share of the time your team had the ball.
     pub avg_possession: Option<f64>,
     pub avg_boost: Option<f64>,
@@ -131,6 +132,21 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// The mode you played most since this time (unix seconds): (playlist id, matches).
+    pub fn favourite_playlist_since(&self, since: i64) -> Result<Option<(i64, i64)>, StoreError> {
+        let found = self.connection().query_row(
+            "SELECT playlist_id, COUNT(*) AS n FROM matches WHERE ended_at >= ?1
+             GROUP BY playlist_id ORDER BY n DESC, playlist_id LIMIT 1",
+            [since],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+        );
+        match found {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Deletes every match of one day, month or year (with its players, goals and the rest) and
     /// returns how many matches went. Names of players you no longer share a match with go too.
     pub fn delete_period(&mut self, key: &str, utc_offset: i64) -> Result<usize, StoreError> {
@@ -183,7 +199,8 @@ impl Store {
                     AVG(CASE WHEN m.result != 'abandoned' THEN m.my_possession_pct END),
                     AVG(CASE WHEN pm.samples >= {min_samples} THEN pm.avg_boost END),
                     AVG(CASE WHEN pm.samples >= {min_samples} THEN pm.pct_boost_empty END),
-                    AVG(CASE WHEN pm.samples >= {min_samples} THEN pm.avg_speed END)
+                    AVG(CASE WHEN pm.samples >= {min_samples} THEN pm.avg_speed END),
+                    AVG(CASE WHEN m.result != 'abandoned' THEN p.demos END)
              FROM matches m
              LEFT JOIN match_players p ON p.match_id = m.id AND p.slot = m.my_slot
              LEFT JOIN player_movement pm ON pm.match_id = m.id AND pm.slot = m.my_slot
@@ -211,6 +228,7 @@ impl Store {
                 avg_assists: float(8)?,
                 avg_saves: float(9)?,
                 avg_shots: float(10)?,
+                avg_demos: float(15)?,
                 avg_possession: r.get(11)?,
                 avg_boost: r.get(12)?,
                 avg_boost_empty: r.get(13)?,

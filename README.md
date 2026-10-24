@@ -12,19 +12,18 @@
 ## What it does
 
 - **Tracks your matches by itself.** Open the app, start Rocket League, and every match is saved when it ends.
-- **Home, days, months and years.** The first row of the list is **Home**: today only. Today's matches are
-  listed one by one; yesterday and older days collapse into one row per day (the day ends at midnight), older
-  months of the year group their days, and older years only list their months. Open any of them for its
-  numbers (record, time played, win rate, averages, how you move). Every match is kept; these are just summaries
-  computed from them.
-- **Calendar.** The calendar button next to Settings shows a year as twelve months (use the `<` `>` arrows to
-  change year). A day is gray if you did not play and goes through a gradient of red the more you played, with
-  a flashing red at 8 hours or more. Click a played day to open it.
-- **Graphs.** The graph button shows how you are doing over time: win rate, score, goals, assists, saves,
-  shots, possession, boost, time out of boost and speed, over 30 days, 90 days, this year or all time, each
-  with a note on whether you are improving, steady or slipping.
-- **Match history and details.** Result, score, mode and time, then Overview, Players, Goals and Movement
-  (possession, boost habits, speed, touches, goals with your boost at that moment).
+- **Three tabs on top: Tracking, Main Menu, Capturing.** The small light beside them shows whether tracking
+  is on (click it to switch). The gear opens Settings.
+- **Main Menu.** A welcome, a few numbers that rotate every 10 seconds (how you move, score and defend, your
+  record, favourites), your latest screenshots and clips as a slideshow, and four small graphs of the last 30
+  days: win rate, assists, average boost and possession. A graph is green while you improve; when it slips it
+  turns red, except assists, which turn orange with "To work on". The Calendar button opens a year of months,
+  every day coloured by how long you played (gray for nothing, a flashing red at 8 hours or more).
+- **Tracking.** Today is one group with all of today's matches inside it. Earlier days are one row each (the
+  day ends at midnight), older months of the year group their days, and older years only list their months.
+  Open any of them for its numbers. Every match is kept; these are only summaries computed from them.
+- **Match history and details.** Result, score, mode and time, then Overview and Advanced (players, goals and
+  movement: possession, boost habits, speed, touches, goals with your boost at that moment).
 - **Live window for a second screen.** Choose *2 Screens* or *Both* in the setup (or settings) and a window opens
   by itself when a match starts: score and clock, possession for both teams, your boost and speed, a live
   scoreboard and the latest goals, saves and demolitions. Close it and it stays closed for that match.
