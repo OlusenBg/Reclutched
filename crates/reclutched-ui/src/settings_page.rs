@@ -18,6 +18,19 @@ use crate::setup::{switch_subtitle, switch_title};
 const HYPRLAND_OPAQUE_RULE: &str =
     r#"hl.window_rule({ match = { class = "^dev\\.reclutched\\.Reclutched$" }, opaque = true })"#;
 
+const POPUP_POSITIONS: [(&str, &str); 3] = [
+    ("top", "Top, centred"),
+    ("top-left", "Top left"),
+    ("top-right", "Top right"),
+];
+
+const CORNERS: [(&str, &str); 4] = [
+    ("bottom-left", "Bottom left"),
+    ("bottom-right", "Bottom right"),
+    ("top-left", "Top left"),
+    ("top-right", "Top right"),
+];
+
 const MODES: [(DisplayMode, &str); 3] = [
     (DisplayMode::Overlay, "Overlay"),
     (DisplayMode::TwoScreens, "2 Screens"),
@@ -26,7 +39,10 @@ const MODES: [(DisplayMode, &str); 3] = [
 
 /// Loads the file, lets `change` edit it and saves it again. Reading first means we never
 /// overwrite something that changed elsewhere (for example the player id `track` learned).
-fn update(path: &std::path::Path, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
+pub(crate) fn update(
+    path: &std::path::Path,
+    change: impl FnOnce(&mut Settings),
+) -> Result<(), String> {
     let mut settings = Settings::load(path).map_err(|e| e.to_string())?;
     change(&mut settings);
     settings.save(path).map_err(|e| e.to_string())
@@ -130,6 +146,8 @@ pub struct CaptureHooks {
     /// Forgets what you chose to share, then asks again.
     pub choose_again: Rc<dyn Fn()>,
     pub screenshot: Rc<dyn Fn()>,
+    /// Shows an example of the save pop-up.
+    pub preview: Rc<dyn Fn()>,
 }
 
 /// What the page needs from the app around it.
@@ -164,11 +182,13 @@ pub fn build(
 
     // One page per section; the sidebar on the left switches between them.
     let general_page = SectionPage::new("General");
+    let keybinds_page = SectionPage::new("Keybinds");
     let overlay_page = SectionPage::new("Overlay");
-    let game_page = SectionPage::new("Rocket League");
     let capture_page = SectionPage::new("Capture");
-    let track_page = SectionPage::new("What to track");
-    let data_page = SectionPage::new("Your data");
+    let game_page = SectionPage::new("Rocket League");
+    let track_page = SectionPage::new("Tracking");
+    let data_page = SectionPage::new("Data");
+    let about_page = SectionPage::new("About");
 
     // --- profile and mode ---
     let profile = adw::PreferencesGroup::builder().title("Profile").build();
@@ -219,18 +239,41 @@ pub fn build(
     profile.add(&mode_row);
 
     general_page.add(&profile);
-    let (overlay_group, key_controller) = binding_group(
-        "Hold to show",
-        "Hold the key or the button to show the overlay in the game (Overlay and Both modes). Set one or both; either works. Reading them needs permission: sudo usermod -aG input $USER, then log out and in.",
+    // --- keybinds: every key and controller button in one place ---
+    let note = adw::PreferencesGroup::builder()
+        .description("Set a keyboard key, a controller button, or both; either one works. Reading them needs permission once: run  sudo usermod -aG input $USER  and log out and in again. Other keys and buttons are never read, stored or sent anywhere.")
+        .build();
+    keybinds_page.add(&note);
+    let (overlay_keys, key_controller) = binding_group(
+        "Show the overlay (hold)",
+        "Hold it in the game to show the panel; let go to hide it.",
         OVERLAY_BINDING,
         &path,
         &current,
         &on_error,
         &hooks,
     );
-    overlay_page.add(&overlay_group);
-    let shot_controller =
-        capture_section(&capture_page, parent, &path, &current, &on_error, &hooks);
+    keybinds_page.add(&overlay_keys);
+    let (shot_keys, shot_controller) = binding_group(
+        "Take a screenshot",
+        "Press it to save a picture of the game (turn on Capture first).",
+        SCREENSHOT_BINDING,
+        &path,
+        &current,
+        &on_error,
+        &hooks,
+    );
+    keybinds_page.add(&shot_keys);
+
+    // --- startup (General) ---
+    general_page.add(&startup_group(&path, &current, &on_error));
+
+    // --- overlay look ---
+    for group in overlay_groups(&path, &current, &on_error) {
+        overlay_page.add(&group);
+    }
+
+    capture_section(&capture_page, parent, &path, &current, &on_error, &hooks);
 
     // --- Rocket League: where it is, and whether its Stats API is on ---
     let game = adw::PreferencesGroup::builder()
@@ -356,7 +399,9 @@ pub fn build(
     }
 
     // --- should the app track by itself? ---
-    let tracking = adw::PreferencesGroup::builder().title("Tracking").build();
+    let tracking = adw::PreferencesGroup::builder()
+        .title("While you play")
+        .build();
     let auto_row = adw::SwitchRow::builder()
         .title("Track matches when the app opens")
         .subtitle("The app watches Rocket League and saves every match. You can also switch it on and off from the main window.")
@@ -373,7 +418,7 @@ pub fn build(
         });
     }
     tracking.add(&auto_row);
-    track_page.add(&tracking);
+    general_page.add(&tracking);
 
     // --- the tracking switches, in the same three groups as the Advanced setup ---
     let groups: [(&str, &[&str]); 3] = [
@@ -455,6 +500,7 @@ pub fn build(
     rerun.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     data.add(&rerun);
     data_page.add(&data);
+    about_page.add(&about_group());
     data_page.add(&crate::wipe::group(
         parent,
         db_path.clone(),
@@ -477,13 +523,15 @@ pub fn build(
     }
     header.pack_start(&back);
     header.set_title_widget(Some(&adw::WindowTitle::new("Settings", "")));
-    let sections: [(&str, &str, &SectionPage); 6] = [
+    let sections: [(&str, &str, &SectionPage); 8] = [
         ("general", "General", &general_page),
+        ("keybinds", "Keybinds", &keybinds_page),
         ("overlay", "Overlay", &overlay_page),
         ("capture", "Capture", &capture_page),
         ("game", "Rocket League", &game_page),
-        ("track", "What to track", &track_page),
-        ("data", "Your data", &data_page),
+        ("track", "Tracking", &track_page),
+        ("data", "Data", &data_page),
+        ("about", "About", &about_page),
     ];
     let stack = gtk::Stack::builder()
         .transition_type(gtk::StackTransitionType::Crossfade)
@@ -535,7 +583,6 @@ pub fn build(
 }
 
 /// The Capture section: the switch, what is captured, the screenshot key and where files go.
-/// Returns the key controller for the screenshot key row.
 fn capture_section(
     page: &SectionPage,
     parent: &adw::ApplicationWindow,
@@ -543,7 +590,7 @@ fn capture_section(
     current: &Settings,
     on_error: &Rc<dyn Fn(&str)>,
     hooks: &Hooks,
-) -> gtk::EventControllerKey {
+) {
     let group = adw::PreferencesGroup::builder()
         .title("Screenshots and clips")
         .description("Your desktop asks once what to share (your screen or the game window). Reclutched only records while this is on.")
@@ -623,16 +670,90 @@ fn capture_section(
         });
     }
 
-    let (shot_group, controller) = binding_group(
-        "Screenshot",
-        "Press the key or the button to save a picture of the game. Reading them needs the same permission as the overlay key: sudo usermod -aG input $USER, then log out and in.",
-        SCREENSHOT_BINDING,
-        path,
-        current,
-        on_error,
-        hooks,
+    // --- the pop-up when something is saved ---
+    let popup = adw::PreferencesGroup::builder()
+        .title("Save pop-up")
+        .description("A small card slides down from the top of the screen, over the game, when a screenshot, a clip or a match is saved.")
+        .build();
+    let show_row = adw::SwitchRow::builder()
+        .title("Show the pop-up")
+        .active(current.notify_enabled)
+        .build();
+    {
+        let (path, on_error) = (path.clone(), on_error.clone());
+        show_row.connect_active_notify(move |row| {
+            let on = row.is_active();
+            if let Err(e) = update(&path, |s| s.notify_enabled = on) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    popup.add(&show_row);
+    let seconds_row = adw::SpinRow::with_range(2.0, 20.0, 1.0);
+    seconds_row.set_title("How long it stays");
+    seconds_row.set_subtitle("Seconds");
+    seconds_row.set_value(f64::from(current.notify_seconds.clamp(2, 20)));
+    {
+        let (path, on_error) = (path.clone(), on_error.clone());
+        seconds_row.connect_value_notify(move |row| {
+            let seconds = row.value() as u32;
+            if let Err(e) = update(&path, |s| s.notify_seconds = seconds) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    popup.add(&seconds_row);
+    let position_row = adw::ComboRow::builder()
+        .title("Where")
+        .model(&gtk::StringList::new(
+            &POPUP_POSITIONS.map(|(_, name)| name),
+        ))
+        .build();
+    position_row.set_selected(
+        POPUP_POSITIONS
+            .iter()
+            .position(|(key, _)| *key == current.notify_position)
+            .unwrap_or(0) as u32,
     );
-    page.add(&shot_group);
+    {
+        let (path, on_error) = (path.clone(), on_error.clone());
+        position_row.connect_selected_notify(move |row| {
+            let Some((key, _)) = POPUP_POSITIONS.get(row.selected() as usize) else {
+                return;
+            };
+            if let Err(e) = update(&path, |s| s.notify_position = (*key).to_string()) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    popup.add(&position_row);
+    let sound_row = adw::SwitchRow::builder()
+        .title("Play a sound")
+        .subtitle("A short system sound when something is saved")
+        .active(current.notify_sound)
+        .build();
+    {
+        let (path, on_error) = (path.clone(), on_error.clone());
+        sound_row.connect_active_notify(move |row| {
+            let on = row.is_active();
+            if let Err(e) = update(&path, |s| s.notify_sound = on) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    popup.add(&sound_row);
+    let preview_row = adw::ActionRow::builder()
+        .title("Show an example")
+        .subtitle("See what it looks like with these settings")
+        .activatable(true)
+        .build();
+    preview_row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+    {
+        let preview = hooks.capture.preview.clone();
+        preview_row.connect_activated(move |_| preview());
+    }
+    popup.add(&preview_row);
+    page.add(&popup);
 
     // --- where files go ---
     let files = adw::PreferencesGroup::builder().title("Saving").build();
@@ -697,7 +818,215 @@ fn capture_section(
         .build();
     needs.add(&row);
     page.add(&needs);
-    controller
+}
+
+/// Starting with the computer.
+fn startup_group(
+    path: &Rc<PathBuf>,
+    current: &Settings,
+    on_error: &Rc<dyn Fn(&str)>,
+) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Startup")
+        .description("Open Reclutched when you log in, so tracking and the overlay are ready before you start the game.")
+        .build();
+    let login = adw::SwitchRow::builder()
+        .title("Start with my computer")
+        .active(current.start_on_login)
+        .build();
+    let minimized = adw::SwitchRow::builder()
+        .title("Start minimized")
+        .subtitle("Tracking and the overlay run; the window stays out of the way")
+        .active(current.start_minimized)
+        .sensitive(current.start_on_login)
+        .build();
+    {
+        let (path, on_error, minimized) = (path.clone(), on_error.clone(), minimized.clone());
+        login.connect_active_notify(move |row| {
+            let on = row.is_active();
+            minimized.set_sensitive(on);
+            let mini = minimized.is_active();
+            let result = crate::startup::set_autostart(on, mini)
+                .and_then(|()| update(&path, |s| s.start_on_login = on).map_err(|e| e.to_string()));
+            if let Err(e) = result {
+                on_error(&format!("Could not change startup: {e}"));
+            }
+        });
+    }
+    {
+        let (path, on_error, login) = (path.clone(), on_error.clone(), login.clone());
+        minimized.connect_active_notify(move |row| {
+            let mini = row.is_active();
+            let result = crate::startup::set_autostart(login.is_active(), mini).and_then(|()| {
+                update(&path, |s| s.start_minimized = mini).map_err(|e| e.to_string())
+            });
+            if let Err(e) = result {
+                on_error(&format!("Could not change startup: {e}"));
+            }
+        });
+    }
+    group.add(&login);
+    group.add(&minimized);
+    group
+}
+
+/// The overlay's look: the pill and the parts of the panel, plus the window hints.
+fn overlay_groups(
+    path: &Rc<PathBuf>,
+    current: &Settings,
+    on_error: &Rc<dyn Fn(&str)>,
+) -> Vec<adw::PreferencesGroup> {
+    let pill = adw::PreferencesGroup::builder()
+        .title("Status light")
+        .description("The small \"Tracking\" light in the corner of the game.")
+        .build();
+    let corner_row = adw::ComboRow::builder()
+        .title("Corner")
+        .model(&gtk::StringList::new(&CORNERS.map(|(_, name)| name)))
+        .build();
+    corner_row.set_selected(
+        CORNERS
+            .iter()
+            .position(|(key, _)| *key == current.overlay_corner)
+            .unwrap_or(0) as u32,
+    );
+    {
+        let (path, on_error) = (path.clone(), on_error.clone());
+        corner_row.connect_selected_notify(move |row| {
+            let Some((key, _)) = CORNERS.get(row.selected() as usize) else {
+                return;
+            };
+            if let Err(e) = update(&path, |s| s.overlay_corner = (*key).to_string()) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    pill.add(&corner_row);
+    let opacity_row = adw::ActionRow::builder()
+        .title("How solid")
+        .subtitle("Lower is more see-through")
+        .build();
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 30.0, 100.0, 5.0);
+    scale.set_value(f64::from(current.overlay_opacity.clamp(30, 100)));
+    scale.set_width_request(220);
+    scale.set_valign(gtk::Align::Center);
+    scale.set_draw_value(true);
+    scale.set_value_pos(gtk::PositionType::Right);
+    {
+        let (path, on_error) = (path.clone(), on_error.clone());
+        scale.connect_value_changed(move |scale| {
+            let value = scale.value().round() as u8;
+            if let Err(e) = update(&path, |s| s.overlay_opacity = value) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    opacity_row.add_suffix(&scale);
+    pill.add(&opacity_row);
+
+    let panel = adw::PreferencesGroup::builder()
+        .title("Panel during a match")
+        .description("What the panel shows while you hold the key in a match.")
+        .build();
+    type Setter = fn(&mut Settings, bool);
+    let parts: [(&str, &str, bool, Setter); 3] = [
+        (
+            "Possession bar",
+            "Who has the ball, across the top",
+            current.overlay_show_possession,
+            |s, v| s.overlay_show_possession = v,
+        ),
+        (
+            "Your habits",
+            "Boost and speed compared with your usual, on the left",
+            current.overlay_show_habits,
+            |s, v| s.overlay_show_habits = v,
+        ),
+        (
+            "Players",
+            "The scoreboard of the match, on the right",
+            current.overlay_show_players,
+            |s, v| s.overlay_show_players = v,
+        ),
+    ];
+    for (title, subtitle, active, set) in parts {
+        let row = adw::SwitchRow::builder()
+            .title(title)
+            .subtitle(subtitle)
+            .active(active)
+            .build();
+        let (path, on_error) = (path.clone(), on_error.clone());
+        row.connect_active_notify(move |row| {
+            let on = row.is_active();
+            if let Err(e) = update(&path, |s| set(s, on)) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+        panel.add(&row);
+    }
+
+    let window = adw::PreferencesGroup::builder()
+        .title("Game window")
+        .description("The overlay only shows on the Rocket League window. If yours is not recognised, add a word from its name here (separate several with commas).")
+        .build();
+    let hints_row = adw::EntryRow::builder()
+        .title("Extra window names")
+        .show_apply_button(true)
+        .text(current.game_window_hints.join(", "))
+        .build();
+    {
+        let (path, on_error) = (path.clone(), on_error.clone());
+        hints_row.connect_apply(move |row| {
+            let hints: Vec<String> = row
+                .text()
+                .split(',')
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty())
+                .collect();
+            if let Err(e) = update(&path, |s| s.game_window_hints = hints) {
+                on_error(&format!("Could not save: {e}"));
+            }
+        });
+    }
+    window.add(&hints_row);
+    vec![pill, panel, window]
+}
+
+/// Version, licence and what the app promises about your data.
+fn about_group() -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder().title("Reclutched").build();
+    for (title, value) in [
+        ("Version", env!("CARGO_PKG_VERSION").to_string()),
+        ("Licence", "GNU GPL v3 or later".to_string()),
+        (
+            "Privacy",
+            "Only the game's official local Stats API is used. Everything stays on this computer."
+                .to_string(),
+        ),
+    ] {
+        group.add(
+            &adw::ActionRow::builder()
+                .title(title)
+                .subtitle(value)
+                .subtitle_selectable(true)
+                .build(),
+        );
+    }
+    let source = adw::ActionRow::builder()
+        .title("Source code")
+        .subtitle("github.com/OlusenBg/Reclutched")
+        .activatable(true)
+        .build();
+    source.add_suffix(&gtk::Image::from_icon_name("adw-external-link-symbolic"));
+    source.connect_activated(|_| {
+        gtk::UriLauncher::new("https://github.com/OlusenBg/Reclutched").launch(
+            None::<&gtk::Window>,
+            gtk::gio::Cancellable::NONE,
+            |_| {},
+        );
+    });
+    group.add(&source);
+    group
 }
 
 /// Where one saved binding lives in the settings.

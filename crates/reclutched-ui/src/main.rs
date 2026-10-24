@@ -18,12 +18,14 @@ mod list;
 mod live;
 mod mainview;
 mod menu;
+mod notify;
 mod overlay;
 mod panel;
 mod settings_page;
 mod setup;
 mod shell;
 mod splash;
+mod startup;
 mod summary;
 mod tracking;
 mod trends;
@@ -76,6 +78,9 @@ struct Args {
     /// Developer option: act as if the overlay key were held down (for screenshots).
     #[arg(long, hide = true)]
     hold_key: bool,
+    /// Start with the window minimized (tracking and the overlay still run).
+    #[arg(long)]
+    minimized: bool,
     /// Developer option: capture a moving test picture instead of the screen.
     #[arg(long, hide = true)]
     capture_test: bool,
@@ -148,6 +153,8 @@ struct App {
     shots: RefCell<Vec<std::sync::mpsc::Receiver<Result<PathBuf, String>>>>,
     shot_timer_started: Cell<bool>,
     shot_at_start: Cell<bool>,
+    /// The pop-up for saved screenshots, clips and matches (made when first needed).
+    notifier: RefCell<Option<Rc<notify::Notifier>>>,
 }
 
 /// Wraps a page with a flat, empty header bar, so the window can be moved and closed
@@ -301,7 +308,7 @@ impl App {
                 }
                 tracking::Update::Event(TrackEvent::MatchSaved { summary, .. }) => {
                     self.usual_loaded.set(false);
-                    self.toast(&format!("Saved: {summary}"));
+                    self.announce_match(&summary);
                     if let Some(view) = self.main_view.borrow().as_ref() {
                         view.reload();
                     }
@@ -385,6 +392,9 @@ impl App {
                 Some(DisplayMode::Overlay | DisplayMode::Both)
             ));
             self.sync_key_watcher(&settings);
+            if let Some(overlay) = self.overlay.borrow().as_ref() {
+                overlay.apply_look(&settings);
+            }
         }
         if !self.overlay_wanted.get() {
             self.close_overlay();
@@ -410,6 +420,7 @@ impl App {
                     );
                     return;
                 };
+                created.apply_look(&Settings::load(&self.settings_path).unwrap_or_default());
                 *self.overlay.borrow_mut() = Some(created.clone());
                 created
             }
@@ -489,6 +500,67 @@ impl App {
             }
             gtk::glib::ControlFlow::Continue
         });
+    }
+
+    /// Says that something was saved: the pop-up over everything, or a toast when the desktop
+    /// cannot draw one (or the pop-up is switched off in Settings, then nothing at all).
+    fn announce(&self, popup: &notify::Popup) {
+        let settings = Settings::load(&self.settings_path).unwrap_or_default();
+        if !settings.notify_enabled {
+            return;
+        }
+        if !notify::Notifier::available() {
+            self.toast(&format!("{}: {}", popup.title, popup.subtitle));
+            return;
+        }
+        let notifier = self.notifier.borrow().clone();
+        let notifier = match notifier {
+            Some(n) => n,
+            None => {
+                let Some(app) = self
+                    .window
+                    .application()
+                    .and_then(|a| a.downcast::<adw::Application>().ok())
+                else {
+                    return;
+                };
+                let n = notify::Notifier::new(app);
+                *self.notifier.borrow_mut() = Some(n.clone());
+                n
+            }
+        };
+        notifier.show(popup, &settings);
+    }
+
+    /// The pop-up for the match that was just saved.
+    fn announce_match(&self, summary: &str) {
+        let popup = Store::open(&self.db_path)
+            .ok()
+            .and_then(|store| store.recent_matches(1).ok())
+            .and_then(|rows| rows.into_iter().next())
+            .map(|row| {
+                let names = default_map_path()
+                    .and_then(|p| {
+                        reclutched_core::rocketleague::playlist::PlaylistMap::load(&p).ok()
+                    })
+                    .unwrap_or_else(
+                        reclutched_core::rocketleague::playlist::PlaylistMap::with_builtin,
+                    );
+                let outcome = match row.result.as_str() {
+                    "win" => notify::Outcome::Win,
+                    "loss" => notify::Outcome::Loss,
+                    _ => notify::Outcome::LeftEarly,
+                };
+                notify::Popup::saved_match(
+                    &format::mode_name(&names, row.playlist_id),
+                    &format::score_text(&row),
+                    outcome,
+                )
+            });
+        match popup {
+            Some(popup) => self.announce(&popup),
+            None => self.toast(&format!("Saved: {summary}")),
+        }
     }
 
     /// Turns capturing on or off. On: the desktop may ask what to share.
@@ -585,7 +657,7 @@ impl App {
             });
             for result in finished {
                 match result {
-                    Ok(path) => app.toast(&format!("Screenshot saved: {}", path.display())),
+                    Ok(path) => app.announce(&notify::Popup::screenshot(path)),
                     Err(e) => app.toast(&format!("Screenshot failed: {e}")),
                 }
             }
@@ -787,9 +859,21 @@ impl App {
                         }
                     })
                 },
-                screenshot: Rc::new(move || {
+                screenshot: {
+                    let weak = weak.clone();
+                    Rc::new(move || {
+                        if let Some(app) = weak.upgrade() {
+                            app.take_screenshot();
+                        }
+                    })
+                },
+                preview: Rc::new(move || {
                     if let Some(app) = weak.upgrade() {
-                        app.take_screenshot();
+                        app.announce(&notify::Popup::saved_match(
+                            "Casual Duel",
+                            "4 \u{2013} 2",
+                            notify::Outcome::Win,
+                        ));
                     }
                 }),
             },
@@ -940,6 +1024,7 @@ fn activate(application: &adw::Application, args: &Args) {
         shots: RefCell::new(Vec::new()),
         shot_timer_started: Cell::new(false),
         shot_at_start: Cell::new(args.capture_shot_at_start),
+        notifier: RefCell::new(None),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped
     // when this function returns and every button handler would find a wizard that is gone.
@@ -958,6 +1043,9 @@ fn activate(application: &adw::Application, args: &Args) {
         });
     }
     window.present();
+    if args.minimized {
+        window.minimize();
+    }
     if let Some(problem) = settings_problem {
         app.toast(&format!(
             "Your settings file could not be read, so we start fresh ({problem})"

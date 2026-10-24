@@ -149,6 +149,10 @@ pub fn slideshow(items: &[Media]) -> gtk::Widget {
             for media in chunk {
                 row.append(&tile(media));
             }
+            // Empty slots keep a lone picture the same size as when the slide is full.
+            for _ in chunk.len()..PER_SLIDE {
+                row.append(&gtk::Box::builder().hexpand(true).build());
+            }
             row.upcast()
         })
         .collect();

@@ -321,3 +321,9 @@ button.cal-day.heat8, .cal-swatch.heat8 { animation: cal-pulse 1.3s ease-in-out 
 /* top bar */
 .top-tabs button { padding: 6px 22px; font-weight: 500; }
 .top-tabs button:checked { background: rgba(163, 38, 48, 0.28); color: #ffffff; }
+
+/* ---------- save pop-up ---------- */
+.notify-card { background: #1b1616; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 18px; padding: 14px 22px 14px 14px; min-width: 340px; }
+.notify-thumb { background: #101010; border-radius: 10px; }
+.notify-title { font-size: 17px; font-weight: 600; color: #f1ecea; }
+.notify-sub { font-size: 12px; color: #a2989a; }

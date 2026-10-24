@@ -138,12 +138,21 @@ windowrule = opaque, class:^(dev.reclutched.Reclutched)$
 Settings shows the Lua line with a copy button when it runs under Hyprland. The in-game overlay is transparent
 on purpose and is not affected. The app also stays dark and solid under themed `~/.config/gtk-4.0/gtk.css` files.
 
+### Settings
+
+Settings (the gear) has eight sections: **General** (profile, display mode, start with your computer or minimized,
+tracking when the app opens), **Keybinds** (every key and controller button in one place), **Overlay** (the
+status light's corner and how solid it is, which parts of the in-game panel show, extra game-window names),
+**Capture**, **Rocket League** (game folder, Stats API), **Tracking** (what to collect), **Data** (files, wipe
+data, run the setup again) and **About**.
+
 ### Capturing (screenshots, in progress)
 
 Settings → **Capture** turns on screenshots; clips and match recording are coming in the next steps. It uses
 your desktop's own screen-share portal, so it works on Wayland and X11 without anything injected into the game:
 the first time, your desktop asks what to share (your screen or the game window) and remembers the answer.
-Then press the screenshot key (F9 by default) or a controller button, and the picture is saved in
+Then press the screenshot key (F9 by default) or a controller button, a small card slides down from the top of
+the screen (over the game; you can change where, how long or turn it off), and the picture is saved in
 `~/Videos/Reclutched/Screenshots` (change the folder in the same page).
 
 It needs GStreamer with the PipeWire plugin and a working screen-share portal for your desktop

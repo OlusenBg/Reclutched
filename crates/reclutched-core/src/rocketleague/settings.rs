@@ -107,6 +107,24 @@ pub struct Settings {
     pub screenshot_button: String,
     /// Where screenshots (and later clips) go; `None` means `~/Videos/Reclutched`.
     pub capture_dir: Option<std::path::PathBuf>,
+    /// Start with the computer (an autostart entry), and then start minimized or not.
+    pub start_on_login: bool,
+    pub start_minimized: bool,
+    /// Where the status pill sits: "bottom-left", "bottom-right", "top-left" or "top-right".
+    pub overlay_corner: String,
+    /// How solid the pill is, 30 to 100 percent.
+    pub overlay_opacity: u8,
+    /// Which parts of the overlay panel show during a match.
+    pub overlay_show_possession: bool,
+    pub overlay_show_habits: bool,
+    pub overlay_show_players: bool,
+    /// The pop-up when a screenshot, clip or match is saved.
+    pub notify_enabled: bool,
+    /// How long it stays, in seconds.
+    pub notify_seconds: u32,
+    /// "top", "top-left" or "top-right".
+    pub notify_position: String,
+    pub notify_sound: bool,
 }
 
 impl Default for Settings {
@@ -135,6 +153,17 @@ impl Default for Settings {
             screenshot_key: "F9".to_string(),
             screenshot_button: String::new(),
             capture_dir: None,
+            start_on_login: false,
+            start_minimized: false,
+            overlay_corner: "bottom-left".to_string(),
+            overlay_opacity: 75,
+            overlay_show_possession: true,
+            overlay_show_habits: true,
+            overlay_show_players: true,
+            notify_enabled: true,
+            notify_seconds: 5,
+            notify_position: "top".to_string(),
+            notify_sound: false,
         }
     }
 }

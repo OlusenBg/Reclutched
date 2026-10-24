@@ -545,6 +545,24 @@ fn idle_pieces(
     ]
 }
 
+/// Which parts of the panel show during a match (chosen in Settings, Overlay).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Parts {
+    pub possession: bool,
+    pub habits: bool,
+    pub players: bool,
+}
+
+impl Default for Parts {
+    fn default() -> Self {
+        Self {
+            possession: true,
+            habits: true,
+            players: true,
+        }
+    }
+}
+
 /// The pieces of the panel, ready to be placed on a `gtk::Overlay`. With no match on, it is your
 /// recent form instead.
 pub fn build(
@@ -552,18 +570,25 @@ pub fn build(
     usual: Option<&MovementAverages>,
     recent: Option<&Recent>,
     names: &PlaylistMap,
+    parts: Parts,
 ) -> Vec<gtk::Widget> {
     let Some(snapshot) = snapshot else {
         return idle_pieces(recent, usual, names);
     };
     let mut pieces: Vec<gtk::Widget> = Vec::new();
-    if let Some(bar) = possession_bar(snapshot) {
-        pieces.push(bar.upcast());
+    if parts.possession {
+        if let Some(bar) = possession_bar(snapshot) {
+            pieces.push(bar.upcast());
+        }
     }
-    if let Some(me) = &snapshot.me_movement {
-        pieces.push(you_card(me, usual).upcast());
+    if parts.habits {
+        if let Some(me) = &snapshot.me_movement {
+            pieces.push(you_card(me, usual).upcast());
+        }
     }
-    pieces.push(players_card(snapshot).upcast());
+    if parts.players {
+        pieces.push(players_card(snapshot).upcast());
+    }
     pieces
 }
 

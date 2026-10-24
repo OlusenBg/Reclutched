@@ -8,6 +8,7 @@ use gtk::prelude::*;
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 use reclutched_core::rocketleague::playlist::{default_map_path, PlaylistMap};
+use reclutched_core::rocketleague::settings::Settings;
 use reclutched_core::rocketleague::storage::MovementAverages;
 use reclutched_core::rocketleague::tracker::LiveSnapshot;
 
@@ -57,6 +58,16 @@ pub fn pill_state(status: Status, game_focused: Option<bool>) -> Option<PillStat
     }
 }
 
+/// (bottom, right) for a corner name; anything unknown is the bottom left.
+pub fn corner_edges(corner: &str) -> (bool, bool) {
+    match corner {
+        "bottom-right" => (true, true),
+        "top-left" => (false, false),
+        "top-right" => (false, true),
+        _ => (true, false),
+    }
+}
+
 pub struct Overlay {
     pill: gtk::Window,
     dot: gtk::Label,
@@ -67,6 +78,8 @@ pub struct Overlay {
     panel_pieces: RefCell<Vec<gtk::Widget>>,
     /// Mode names for the list of recent matches.
     names: PlaylistMap,
+    /// Which parts of the panel show during a match.
+    parts: std::cell::Cell<panel::Parts>,
 }
 
 /// How see-through the pill is (1.0 = solid).
@@ -78,7 +91,7 @@ pub fn supported() -> bool {
 }
 
 /// Makes a window an overlay layer: above everything, no focus, and mouse clicks fall through.
-fn make_overlay_layer(window: &gtk::Window) {
+pub(crate) fn make_overlay_layer(window: &gtk::Window) {
     window.init_layer_shell();
     window.set_layer(Layer::Overlay);
     window.set_namespace(Some("reclutched-overlay"));
@@ -149,6 +162,7 @@ impl Overlay {
             names: default_map_path()
                 .and_then(|p| PlaylistMap::load(&p).ok())
                 .unwrap_or_else(PlaylistMap::with_builtin),
+            parts: std::cell::Cell::new(panel::Parts::default()),
         }))
     }
 
@@ -162,7 +176,7 @@ impl Overlay {
         for old in self.panel_pieces.borrow_mut().drain(..) {
             self.panel_root.remove_overlay(&old);
         }
-        let pieces = panel::build(snapshot, usual, recent, &self.names);
+        let pieces = panel::build(snapshot, usual, recent, &self.names, self.parts.get());
         for piece in &pieces {
             self.panel_root.add_overlay(piece);
         }
@@ -170,6 +184,26 @@ impl Overlay {
         if !self.panel.is_visible() {
             self.panel.present();
         }
+    }
+
+    /// Follows the look chosen in Settings: the pill's corner and how solid it is, and which parts
+    /// of the panel show.
+    pub fn apply_look(&self, settings: &Settings) {
+        let (bottom, right) = corner_edges(&settings.overlay_corner);
+        self.pill.set_anchor(Edge::Bottom, bottom);
+        self.pill.set_anchor(Edge::Top, !bottom);
+        self.pill.set_anchor(Edge::Right, right);
+        self.pill.set_anchor(Edge::Left, !right);
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            self.pill.set_margin(edge, 28);
+        }
+        self.pill
+            .set_opacity(f64::from(settings.overlay_opacity.clamp(30, 100)) / 100.0);
+        self.parts.set(panel::Parts {
+            possession: settings.overlay_show_possession,
+            habits: settings.overlay_show_habits,
+            players: settings.overlay_show_players,
+        });
     }
 
     pub fn hide_panel(&self) {
@@ -201,6 +235,15 @@ impl Overlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corners_map_to_edges() {
+        assert_eq!(corner_edges("bottom-left"), (true, false));
+        assert_eq!(corner_edges("bottom-right"), (true, true));
+        assert_eq!(corner_edges("top-left"), (false, false));
+        assert_eq!(corner_edges("top-right"), (false, true));
+        assert_eq!(corner_edges("???"), (true, false));
+    }
 
     #[test]
     fn the_pill_follows_focus_and_connection() {
