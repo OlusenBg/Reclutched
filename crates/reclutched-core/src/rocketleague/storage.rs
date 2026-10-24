@@ -28,7 +28,24 @@ pub enum StoreError {
 }
 
 /// Bump this and add a step in [`migrate`] whenever the schema changes.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+
+/// Screenshots, clips and full-match recordings. A match that is deleted only lets go of them
+/// (the files stay where they are).
+const MIGRATE_V3: &str = "
+CREATE TABLE clips (
+    id        INTEGER PRIMARY KEY,
+    match_id  INTEGER REFERENCES matches (id) ON DELETE SET NULL,
+    path      TEXT NOT NULL,
+    kind      TEXT NOT NULL CHECK (kind IN ('screenshot', 'clip', 'match')),
+    trigger   TEXT NOT NULL,
+    taken_at  INTEGER NOT NULL,
+    seconds   INTEGER NOT NULL DEFAULT 0,
+    thumb     TEXT
+);
+CREATE INDEX clips_match ON clips (match_id);
+CREATE INDEX clips_taken_at ON clips (taken_at);
+";
 
 const SCHEMA_V1: &str = "
 CREATE TABLE players (
@@ -511,8 +528,109 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             conn.execute_batch("VACUUM;")?;
         }
     }
-    // Future: `if found < 3 { ...; PRAGMA user_version = 3; }`
+    if found < 3 {
+        conn.execute_batch(&format!(
+            "BEGIN; {MIGRATE_V3} PRAGMA user_version = 3; COMMIT;"
+        ))?;
+    }
+    // Future: `if found < 4 { ...; PRAGMA user_version = 4; }`
     Ok(())
+}
+
+/// A screenshot, a clip or a full-match recording we saved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipRow {
+    pub id: i64,
+    pub match_id: Option<i64>,
+    pub path: String,
+    /// "screenshot", "clip" or "match".
+    pub kind: String,
+    /// What made it: "key", "goal", "save", "demo", "match end", "recording".
+    pub trigger: String,
+    pub taken_at: i64,
+    pub seconds: i64,
+    /// A picture of the first frame, for clips and recordings.
+    pub thumb: Option<String>,
+}
+
+/// What [`Store::add_clip`] needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewClip {
+    pub path: String,
+    pub kind: String,
+    pub trigger: String,
+    pub taken_at: i64,
+    pub seconds: i64,
+    pub thumb: Option<String>,
+}
+
+fn clip_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ClipRow> {
+    Ok(ClipRow {
+        id: r.get(0)?,
+        match_id: r.get(1)?,
+        path: r.get(2)?,
+        kind: r.get(3)?,
+        trigger: r.get(4)?,
+        taken_at: r.get(5)?,
+        seconds: r.get(6)?,
+        thumb: r.get(7)?,
+    })
+}
+
+impl Store {
+    /// Remembers a screenshot, clip or recording. Returns its id.
+    pub fn add_clip(&self, clip: &NewClip) -> Result<i64, StoreError> {
+        self.conn.execute(
+            "INSERT INTO clips (path, kind, trigger, taken_at, seconds, thumb)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                clip.path,
+                clip.kind,
+                clip.trigger,
+                clip.taken_at,
+                clip.seconds,
+                clip.thumb
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Ties clips taken during a match to the match once it is saved.
+    pub fn attach_clips(&self, clip_ids: &[i64], match_id: i64) -> Result<(), StoreError> {
+        for id in clip_ids {
+            self.conn.execute(
+                "UPDATE clips SET match_id = ?1 WHERE id = ?2",
+                rusqlite::params![match_id, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The screenshots, clips and recording of one match, oldest first.
+    pub fn clips_for_match(&self, match_id: i64) -> Result<Vec<ClipRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, match_id, path, kind, trigger, taken_at, seconds, thumb
+             FROM clips WHERE match_id = ?1 ORDER BY taken_at, id",
+        )?;
+        let rows = stmt.query_map([match_id], clip_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// The newest ones, newest first.
+    pub fn recent_clips(&self, limit: u32) -> Result<Vec<ClipRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, match_id, path, kind, trigger, taken_at, seconds, thumb
+             FROM clips ORDER BY taken_at DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], clip_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Forgets one entry (not its file).
+    pub fn forget_clip(&self, id: i64) -> Result<(), StoreError> {
+        self.conn.execute("DELETE FROM clips WHERE id = ?1", [id])?;
+        Ok(())
+    }
 }
 
 /// A saved match as shown in `history`.
@@ -976,7 +1094,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, SCHEMA_VERSION);
         // Old rows survive, new columns get neutral defaults.
         let (samples, boost, ground, powerslide): (i64, f64, f64, f64) = conn
             .query_row(

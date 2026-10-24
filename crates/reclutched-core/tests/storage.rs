@@ -113,7 +113,7 @@ fn file_database_reopens_and_refuses_a_newer_schema() {
         .connection()
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     drop(store);
 
     // A database from a future version must not be touched.
@@ -411,4 +411,48 @@ fn wiping_a_period_removes_its_matches_and_everything_attached() {
 
 fn m_players(store: &Store) -> i64 {
     count(store, "players")
+}
+
+#[test]
+fn clips_are_remembered_attached_to_a_match_and_survive_its_deletion() {
+    use reclutched_core::rocketleague::storage::NewClip;
+    let mut store = Store::open_in_memory().unwrap();
+    let id = store.save_match(&real_match()).unwrap().expect("saved");
+    let clip = |path: &str, kind: &str, at: i64| NewClip {
+        path: path.into(),
+        kind: kind.into(),
+        trigger: "key".into(),
+        taken_at: at,
+        seconds: 30,
+        thumb: None,
+    };
+    let a = store.add_clip(&clip("/c/a.mp4", "clip", 100)).unwrap();
+    let b = store
+        .add_clip(&clip("/c/b.png", "screenshot", 200))
+        .unwrap();
+    let outside = store.add_clip(&clip("/c/c.mp4", "clip", 300)).unwrap();
+    assert!(store.clips_for_match(id).unwrap().is_empty());
+    store.attach_clips(&[a, b], id).unwrap();
+    let mine = store.clips_for_match(id).unwrap();
+    assert_eq!(
+        mine.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
+        ["/c/a.mp4", "/c/b.png"]
+    );
+    assert_eq!(store.recent_clips(2).unwrap()[0].id, outside);
+    // Deleting the match keeps the entries, just no longer tied to it.
+    store
+        .connection()
+        .execute("DELETE FROM matches WHERE id = ?1", [id])
+        .unwrap();
+    assert_eq!(store.recent_clips(10).unwrap().len(), 3);
+    assert!(store
+        .recent_clips(10)
+        .unwrap()
+        .iter()
+        .all(|c| c.match_id.is_none()));
+    store.forget_clip(a).unwrap();
+    assert_eq!(store.recent_clips(10).unwrap().len(), 2);
+    // Wiping everything also forgets them.
+    store.delete_everything().unwrap();
+    assert!(store.recent_clips(10).unwrap().is_empty());
 }

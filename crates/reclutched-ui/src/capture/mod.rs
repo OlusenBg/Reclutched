@@ -1,8 +1,12 @@
-//! Capturing: screenshots now, clips and match recording in the next steps. The picture comes
-//! from the desktop's screen-share portal (PipeWire) and is processed by GStreamer.
+//! Capturing: screenshots, a rolling recording for clips, and whole-match recordings. The
+//! picture comes from the desktop's screen-share portal (PipeWire) and is processed by
+//! GStreamer.
 
 pub mod gst;
 mod portal;
+pub mod record;
+pub mod recorder;
+pub mod ring;
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -10,6 +14,8 @@ use std::time::Duration;
 
 use portal::Portal;
 pub use portal::State;
+pub use record::Config as RecordConfig;
+pub use recorder::{cache_dir, save_range, Recorder, Saved};
 
 /// What the settings page and the app show about capturing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +81,33 @@ impl Capture {
                 State::Failed(e) => Status::Failed(e),
             },
         }
+    }
+
+    /// Starts the rolling recording on a worker thread (picking an encoder takes a moment). The
+    /// answer is the running recorder, or what is missing.
+    pub fn start_recording(
+        &self,
+        config: RecordConfig,
+    ) -> mpsc::Receiver<Result<Recorder, String>> {
+        let (tx, rx) = mpsc::channel();
+        let portal = self.portal.clone();
+        std::thread::spawn(move || {
+            let result = (|| {
+                record::requirements()?;
+                let encoder = record::encoder().ok_or("no video encoder")?;
+                let aac = record::choose_aac(&gst::has_element);
+                let (node, fd) = match &portal {
+                    None => (None, None),
+                    Some(portal) => match portal.state() {
+                        State::Ready { node, .. } => (Some(node), Some(portal.remote()?)),
+                        _ => return Err("capturing is not ready yet".to_string()),
+                    },
+                };
+                Recorder::start(&cache_dir(), node, fd, &config, encoder, aac)
+            })();
+            let _ = tx.send(result);
+        });
+        rx
     }
 
     /// Saves a screenshot as `<folder>/Screenshots/Reclutched <stamp>.png` on a worker thread.

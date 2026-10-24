@@ -30,7 +30,7 @@ pub fn quote(value: &str) -> String {
     out
 }
 
-fn source_args(source: &Source) -> Vec<String> {
+pub(super) fn source_args(source: &Source) -> Vec<String> {
     match source {
         Source::Portal { fd, node } => vec![
             "pipewiresrc".into(),
@@ -70,6 +70,15 @@ pub fn screenshot_args(source: &Source, path: &Path) -> Vec<String> {
 
 /// The elements a step needs, and the first one that is missing. `Err` carries a sentence for
 /// the user: GStreamer itself is not installed, or which part is missing.
+pub fn has_element(name: &str) -> bool {
+    Command::new("gst-inspect-1.0")
+        .args(["--exists", name])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
 pub fn check_elements(elements: &[&str]) -> Result<(), String> {
     if which("gst-launch-1.0").is_none() || which("gst-inspect-1.0").is_none() {
         return Err("GStreamer is not installed (gst-launch-1.0 was not found)".to_string());
@@ -104,15 +113,15 @@ fn which(program: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// Runs `gst-launch-1.0` and waits for it (killing it after `limit`). `keep` is a file
-/// descriptor the child has to inherit; it is closed here once the child has started.
-pub fn run(args: &[String], keep: Option<OwnedFd>, limit: Duration) -> Result<(), String> {
+/// Starts `gst-launch-1.0` without waiting. `keep` is a file descriptor the child has to
+/// inherit; it is closed here once the child has started.
+pub fn spawn(args: &[String], keep: Option<OwnedFd>) -> Result<std::process::Child, String> {
     if let Some(fd) = &keep {
         // Descriptors are closed on exec by default; this one has to survive into gst-launch.
         rustix::io::fcntl_setfd(fd, rustix::io::FdFlags::empty())
             .map_err(|e| format!("could not share the screen stream: {e}"))?;
     }
-    let mut child = Command::new("gst-launch-1.0")
+    let child = Command::new("gst-launch-1.0")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -120,6 +129,12 @@ pub fn run(args: &[String], keep: Option<OwnedFd>, limit: Duration) -> Result<()
         .spawn()
         .map_err(|e| format!("could not start gst-launch-1.0: {e}"))?;
     drop(keep);
+    Ok(child)
+}
+
+/// Runs `gst-launch-1.0` and waits for it (killing it after `limit`).
+pub fn run(args: &[String], keep: Option<OwnedFd>, limit: Duration) -> Result<(), String> {
+    let mut child = spawn(args, keep)?;
     let started = Instant::now();
     loop {
         match child.try_wait() {
@@ -150,7 +165,7 @@ pub fn run(args: &[String], keep: Option<OwnedFd>, limit: Duration) -> Result<()
     }
 }
 
-fn last_line(text: &str) -> String {
+pub fn last_line(text: &str) -> String {
     text.lines()
         .rev()
         .find(|l| !l.trim().is_empty())

@@ -125,6 +125,29 @@ pub struct Settings {
     /// "top", "top-left" or "top-right".
     pub notify_position: String,
     pub notify_sound: bool,
+    /// What to record: "clips" (a short replay when you ask or something happens) or "full"
+    /// (every match from start to finish).
+    pub record_mode: String,
+    /// How clips are made: "manual" (a key), "auto" (goals, saves, ...) or "both".
+    pub clip_mode: String,
+    /// How many seconds before the moment a clip starts (10 to 50).
+    pub clip_seconds: u32,
+    /// The key and controller button that save a clip of the last seconds.
+    pub clip_key: String,
+    pub clip_button: String,
+    /// What makes an automatic clip: your goals, saves and demolitions, or the end of the match.
+    pub clip_on_goal: bool,
+    pub clip_on_save: bool,
+    pub clip_on_demo: bool,
+    pub clip_on_match_end: bool,
+    /// Sound in the recordings: the game's sound and your microphone.
+    pub audio_game: bool,
+    pub audio_mic: bool,
+    /// Frames per second (30 or 60) and a quality preset ("low", "medium" or "high").
+    pub capture_fps: u32,
+    pub capture_quality: String,
+    /// Full match recordings older than this many days are deleted (0 keeps them).
+    pub full_delete_days: u32,
 }
 
 impl Default for Settings {
@@ -164,6 +187,20 @@ impl Default for Settings {
             notify_seconds: 5,
             notify_position: "top".to_string(),
             notify_sound: false,
+            record_mode: "clips".to_string(),
+            clip_mode: "both".to_string(),
+            clip_seconds: 30,
+            clip_key: "F10".to_string(),
+            clip_button: String::new(),
+            clip_on_goal: true,
+            clip_on_save: true,
+            clip_on_demo: true,
+            clip_on_match_end: false,
+            audio_game: true,
+            audio_mic: false,
+            capture_fps: 60,
+            capture_quality: "medium".to_string(),
+            full_delete_days: 0,
         }
     }
 }

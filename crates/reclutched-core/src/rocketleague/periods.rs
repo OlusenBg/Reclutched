@@ -171,6 +171,7 @@ impl Store {
     pub fn delete_everything(&mut self) -> Result<usize, StoreError> {
         let tx = self.conn.transaction()?;
         let gone = tx.execute("DELETE FROM matches", [])?;
+        tx.execute("DELETE FROM clips", [])?;
         tx.execute("DELETE FROM players", [])?;
         tx.commit()?;
         Ok(gone)

@@ -12,6 +12,7 @@ mod focus;
 mod format;
 mod gallery;
 mod history;
+mod hotkeys;
 mod insights;
 mod keys;
 mod list;
@@ -29,6 +30,7 @@ mod startup;
 mod summary;
 mod tracking;
 mod trends;
+mod triggers;
 mod widgets;
 mod wipe;
 

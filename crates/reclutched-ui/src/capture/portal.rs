@@ -35,6 +35,7 @@ enum Command {
     Remote(mpsc::Sender<Result<OwnedFd, String>>),
 }
 
+#[derive(Clone)]
 pub struct Portal {
     tx: tokio::sync::mpsc::UnboundedSender<Command>,
     state: Arc<Mutex<State>>,
