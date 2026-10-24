@@ -148,6 +148,8 @@ pub struct CaptureHooks {
     pub screenshot: Rc<dyn Fn()>,
     /// Shows an example of the save pop-up.
     pub preview: Rc<dyn Fn()>,
+    /// What the recording is doing right now.
+    pub recording: Rc<dyn Fn() -> String>,
 }
 
 /// What the page needs from the app around it.
@@ -264,6 +266,16 @@ pub fn build(
         &hooks,
     );
     keybinds_page.add(&shot_keys);
+    let (clip_keys, clip_controller) = binding_group(
+        "Save a clip",
+        "Press it to save the last seconds as a clip (turn on Capture first; clips need Manual or Both).",
+        CLIP_BINDING,
+        &path,
+        &current,
+        &on_error,
+        &hooks,
+    );
+    keybinds_page.add(&clip_keys);
 
     // --- startup (General) ---
     general_page.add(&startup_group(&path, &current, &on_error));
@@ -274,6 +286,9 @@ pub fn build(
     }
 
     capture_section(&capture_page, parent, &path, &current, &on_error, &hooks);
+    for group in recording_groups(&path, &current, &on_error, &hooks) {
+        capture_page.add(&group);
+    }
 
     // --- Rocket League: where it is, and whether its Stats API is on ---
     let game = adw::PreferencesGroup::builder()
@@ -579,6 +594,7 @@ pub fn build(
     view.set_content(Some(&body));
     view.add_controller(key_controller);
     view.add_controller(shot_controller);
+    view.add_controller(clip_controller);
     view.upcast()
 }
 
@@ -1036,6 +1052,243 @@ struct Field {
     set: fn(&mut Settings, String),
 }
 
+/// A row that picks one of a few saved words.
+fn combo_row(
+    title: &str,
+    subtitle: &str,
+    options: &'static [(&'static str, &'static str)],
+    selected: &str,
+    path: &Rc<PathBuf>,
+    on_error: &Rc<dyn Fn(&str)>,
+    set: fn(&mut Settings, String),
+) -> adw::ComboRow {
+    let row = adw::ComboRow::builder()
+        .title(title)
+        .model(&gtk::StringList::new(
+            &options.iter().map(|(_, name)| *name).collect::<Vec<_>>(),
+        ))
+        .build();
+    if !subtitle.is_empty() {
+        row.set_subtitle(subtitle);
+    }
+    row.set_selected(
+        options
+            .iter()
+            .position(|(key, _)| *key == selected)
+            .unwrap_or(0) as u32,
+    );
+    let (path, on_error) = (path.clone(), on_error.clone());
+    row.connect_selected_notify(move |row| {
+        let Some((key, _)) = options.get(row.selected() as usize) else {
+            return;
+        };
+        if let Err(e) = update(&path, |s| set(s, (*key).to_string())) {
+            on_error(&format!("Could not save: {e}"));
+        }
+    });
+    row
+}
+
+/// A row with an on/off switch.
+fn switch_row(
+    title: &str,
+    subtitle: &str,
+    active: bool,
+    path: &Rc<PathBuf>,
+    on_error: &Rc<dyn Fn(&str)>,
+    set: fn(&mut Settings, bool),
+) -> adw::SwitchRow {
+    let row = adw::SwitchRow::builder()
+        .title(title)
+        .subtitle(subtitle)
+        .active(active)
+        .build();
+    let (path, on_error) = (path.clone(), on_error.clone());
+    row.connect_active_notify(move |row| {
+        let on = row.is_active();
+        if let Err(e) = update(&path, |s| set(s, on)) {
+            on_error(&format!("Could not save: {e}"));
+        }
+    });
+    row
+}
+
+/// A row with a number and plus/minus buttons.
+#[allow(clippy::too_many_arguments)]
+fn spin_row(
+    title: &str,
+    subtitle: &str,
+    range: (u32, u32),
+    value: u32,
+    path: &Rc<PathBuf>,
+    on_error: &Rc<dyn Fn(&str)>,
+    set: fn(&mut Settings, u32),
+) -> adw::SpinRow {
+    let row = adw::SpinRow::with_range(f64::from(range.0), f64::from(range.1), 1.0);
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+    row.set_value(f64::from(value.clamp(range.0, range.1)));
+    let (path, on_error) = (path.clone(), on_error.clone());
+    row.connect_value_notify(move |row| {
+        let value = row.value() as u32;
+        if let Err(e) = update(&path, |s| set(s, value)) {
+            on_error(&format!("Could not save: {e}"));
+        }
+    });
+    row
+}
+
+const RECORD_MODES: [(&str, &str); 2] = [
+    ("clips", "Clips only"),
+    ("full", "Every match, start to finish"),
+];
+const CLIP_MODES: [(&str, &str); 3] = [
+    ("manual", "Manual (press a key)"),
+    ("auto", "Automatic (goals, saves, ...)"),
+    ("both", "Both"),
+];
+const QUALITIES: [(&str, &str); 3] = [
+    ("low", "Low (720p, small files)"),
+    ("medium", "Medium (1080p)"),
+    ("high", "High (your screen's own size)"),
+];
+const FRAME_RATES: [(&str, &str); 2] = [("30", "30 per second"), ("60", "60 per second")];
+
+/// Recording, clips and sound, for the Capture section.
+fn recording_groups(
+    path: &Rc<PathBuf>,
+    current: &Settings,
+    on_error: &Rc<dyn Fn(&str)>,
+    hooks: &Hooks,
+) -> Vec<adw::PreferencesGroup> {
+    let recording = adw::PreferencesGroup::builder()
+        .title("Recording")
+        .description("While capturing is on and the game is connected, Reclutched keeps the last minute in a temporary folder, so a clip can start before you press the key.")
+        .build();
+    let status = adw::ActionRow::builder().title("Status").build();
+    {
+        let (weak, text) = (status.downgrade(), hooks.capture.recording.clone());
+        status.set_subtitle(&text());
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(900), move || {
+            let Some(row) = weak.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            row.set_subtitle(&text());
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+    recording.add(&status);
+    recording.add(&combo_row(
+        "What to record",
+        "Clips keep short moments; full matches record every match and save it when it ends",
+        &RECORD_MODES,
+        &current.record_mode,
+        path,
+        on_error,
+        |s, v| s.record_mode = v,
+    ));
+    recording.add(&combo_row(
+        "Picture quality",
+        "",
+        &QUALITIES,
+        &current.capture_quality,
+        path,
+        on_error,
+        |s, v| s.capture_quality = v,
+    ));
+    recording.add(&combo_row(
+        "Frame rate",
+        "",
+        &FRAME_RATES,
+        &current.capture_fps.to_string(),
+        path,
+        on_error,
+        |s, v| s.capture_fps = v.parse().unwrap_or(60),
+    ));
+    recording.add(&spin_row(
+        "Delete full recordings after (days)",
+        "0 keeps them for ever",
+        (0, 365),
+        current.full_delete_days,
+        path,
+        on_error,
+        |s, v| s.full_delete_days = v,
+    ));
+
+    let clips = adw::PreferencesGroup::builder()
+        .title("Clips")
+        .description("A clip is the last seconds before the moment (plus three seconds after, for automatic ones).")
+        .build();
+    clips.add(&combo_row(
+        "How clips are made",
+        "",
+        &CLIP_MODES,
+        &current.clip_mode,
+        path,
+        on_error,
+        |s, v| s.clip_mode = v,
+    ));
+    clips.add(&spin_row(
+        "How far back",
+        "Seconds before the moment (10 to 50)",
+        (10, 50),
+        current.clip_seconds,
+        path,
+        on_error,
+        |s, v| s.clip_seconds = v,
+    ));
+    for (title, subtitle, active, set) in [
+        (
+            "Your goals",
+            "A clip every time you score",
+            current.clip_on_goal,
+            (|s: &mut Settings, v| s.clip_on_goal = v) as fn(&mut Settings, bool),
+        ),
+        (
+            "Your saves",
+            "Saves and epic saves",
+            current.clip_on_save,
+            |s, v| s.clip_on_save = v,
+        ),
+        (
+            "Your demolitions",
+            "When you demolish someone",
+            current.clip_on_demo,
+            |s, v| s.clip_on_demo = v,
+        ),
+        (
+            "The end of the match",
+            "The final moments, for example an overtime winner",
+            current.clip_on_match_end,
+            |s, v| s.clip_on_match_end = v,
+        ),
+    ] {
+        clips.add(&switch_row(title, subtitle, active, path, on_error, set));
+    }
+
+    let sound = adw::PreferencesGroup::builder()
+        .title("Sound")
+        .description("What is in the recording besides the picture.")
+        .build();
+    sound.add(&switch_row(
+        "Game sound",
+        "Everything you hear from your computer",
+        current.audio_game,
+        path,
+        on_error,
+        |s, v| s.audio_game = v,
+    ));
+    sound.add(&switch_row(
+        "Microphone",
+        "Your voice, mixed with the game sound",
+        current.audio_mic,
+        path,
+        on_error,
+        |s, v| s.audio_mic = v,
+    ));
+    vec![recording, clips, sound]
+}
+
 /// A keyboard key and a controller button for one action. Both can be set; either one works.
 #[derive(Clone, Copy)]
 struct Binding {
@@ -1051,6 +1304,17 @@ const OVERLAY_BINDING: Binding = Binding {
     button: Field {
         get: |s| s.overlay_button.clone(),
         set: |s, v| s.overlay_button = v,
+    },
+};
+
+const CLIP_BINDING: Binding = Binding {
+    key: Field {
+        get: |s| s.clip_key.clone(),
+        set: |s, v| s.clip_key = v,
+    },
+    button: Field {
+        get: |s| s.clip_button.clone(),
+        set: |s, v| s.clip_button = v,
     },
 };
 

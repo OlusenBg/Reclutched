@@ -12,6 +12,8 @@ use crate::widgets::label;
 pub enum Kind {
     Screenshot,
     Clip,
+    /// A whole match, recorded start to finish.
+    Match,
 }
 
 #[derive(Debug, Clone)]
@@ -19,6 +21,18 @@ pub struct Media {
     pub path: PathBuf,
     pub kind: Kind,
     pub modified: SystemTime,
+    /// A picture of the first frame (clips and matches).
+    pub thumb: Option<PathBuf>,
+}
+
+/// `<folder>/.thumbs/<name>.jpg`, where the picture of a clip is kept.
+pub fn thumb_path(folder: &Path, video: &Path) -> PathBuf {
+    folder.join(".thumbs").join(format!(
+        "{}.jpg",
+        video
+            .file_stem()
+            .map_or_else(String::new, |s| s.to_string_lossy().to_string())
+    ))
 }
 
 const PICTURES: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
@@ -28,6 +42,9 @@ const VIDEOS: [&str; 5] = ["mp4", "mkv", "webm", "mov", "ts"];
 pub const MAX_ITEMS: usize = 12;
 /// How tall a picture is, in pixels.
 const PICTURE_HEIGHT: i32 = 160;
+/// How wide a picture can get, and where it starts to shrink.
+const PICTURE_MAX_WIDTH: i32 = 480;
+const PICTURE_MIN_WIDTH: i32 = 240;
 /// How many sit side by side on one slide.
 const PER_SLIDE: usize = 3;
 
@@ -37,6 +54,7 @@ pub fn recent_media(folder: &Path) -> Vec<Media> {
     for (sub, kind, extensions) in [
         ("Screenshots", Kind::Screenshot, &PICTURES[..]),
         ("Clips", Kind::Clip, &VIDEOS[..]),
+        ("Matches", Kind::Match, &VIDEOS[..]),
     ] {
         let Ok(entries) = std::fs::read_dir(folder.join(sub)) else {
             continue;
@@ -49,10 +67,14 @@ pub fn recent_media(folder: &Path) -> Vec<Media> {
                 .is_some_and(|e| extensions.contains(&e.to_lowercase().as_str()));
             let Ok(meta) = entry.metadata() else { continue };
             if wanted && meta.is_file() && meta.len() > 0 {
+                let thumb = (kind != Kind::Screenshot)
+                    .then(|| thumb_path(folder, &path))
+                    .filter(|t| t.is_file());
                 found.push(Media {
                     path,
                     kind,
                     modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+                    thumb,
                 });
             }
         }
@@ -72,15 +94,19 @@ fn when_text(time: SystemTime) -> String {
         .map_or_else(String::new, |s| s.to_string())
 }
 
-fn tile(media: &Media) -> gtk::Box {
-    let thumb: gtk::Widget = match media.kind {
-        Kind::Screenshot => {
-            let picture = gtk::Picture::for_filename(&media.path);
+pub fn tile(media: &Media) -> gtk::Box {
+    let picture_file = match media.kind {
+        Kind::Screenshot => Some(media.path.clone()),
+        _ => media.thumb.clone(),
+    };
+    let thumb: gtk::Widget = match picture_file {
+        Some(file) => {
+            let picture = gtk::Picture::for_filename(&file);
             picture.set_content_fit(gtk::ContentFit::Cover);
             picture.set_can_shrink(true);
             picture.upcast()
         }
-        Kind::Clip => gtk::Image::builder()
+        None => gtk::Image::builder()
             .icon_name("media-playback-start-symbolic")
             .pixel_size(48)
             .css_classes(["gallery-play"])
@@ -90,12 +116,36 @@ fn tile(media: &Media) -> gtk::Box {
     thumb.set_hexpand(true);
     thumb.set_halign(gtk::Align::Fill);
     thumb.set_valign(gtk::Align::Fill);
+    // A play button over the picture of a video.
+    let thumb: gtk::Widget = if media.kind != Kind::Screenshot && media.thumb.is_some() {
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&thumb));
+        overlay.add_overlay(
+            &gtk::Image::builder()
+                .icon_name("media-playback-start-symbolic")
+                .pixel_size(40)
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Center)
+                .css_classes(["gallery-play-over"])
+                .build(),
+        );
+        overlay.upcast()
+    } else {
+        thumb
+    };
     // However tall the window is, a picture is never taller than this.
     let clamp = adw::Clamp::builder()
         .orientation(gtk::Orientation::Vertical)
         .maximum_size(PICTURE_HEIGHT)
         .tightening_threshold(PICTURE_HEIGHT)
         .child(&thumb)
+        .build();
+    // A big screenshot must not make its tile as wide as the screenshot itself.
+    let clamp = adw::Clamp::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .maximum_size(PICTURE_MAX_WIDTH)
+        .tightening_threshold(PICTURE_MIN_WIDTH)
+        .child(&clamp)
         .build();
     let frame = gtk::Box::builder()
         .css_classes(["gallery-thumb"])
@@ -108,6 +158,7 @@ fn tile(media: &Media) -> gtk::Box {
     let kind = match media.kind {
         Kind::Screenshot => "Screenshot",
         Kind::Clip => "Clip",
+        Kind::Match => "Match",
     };
     let column = gtk::Box::new(gtk::Orientation::Vertical, 6);
     column.set_hexpand(true);
@@ -174,6 +225,8 @@ mod tests {
         std::fs::write(shots.join("empty.png"), b"").unwrap();
         std::fs::write(clips.join("b.MP4"), b"x").unwrap();
         std::fs::write(clips.join("c.png"), b"x").unwrap(); // a picture in Clips: ignored
+        std::fs::create_dir_all(dir.join(".thumbs")).unwrap();
+        std::fs::write(dir.join(".thumbs").join("b.jpg"), b"x").unwrap();
         let found = recent_media(&dir);
         let mut names: Vec<_> = found
             .iter()
@@ -182,6 +235,15 @@ mod tests {
         names.sort();
         assert_eq!(names, ["a.png", "b.MP4"]);
         assert!(found.iter().any(|m| m.kind == Kind::Clip));
+        // The picture of a clip is found by its name.
+        let clip = found.iter().find(|m| m.kind == Kind::Clip).unwrap();
+        assert_eq!(clip.thumb, Some(dir.join(".thumbs").join("b.jpg")));
+        assert!(found
+            .iter()
+            .find(|m| m.kind == Kind::Screenshot)
+            .unwrap()
+            .thumb
+            .is_none());
         assert!(recent_media(&dir.join("nowhere")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -366,7 +366,9 @@ impl MainView {
 
     fn show_match(&self, id: i64) {
         let detail = self.store.match_detail(id).ok().flatten();
-        self.detail.set(detail.as_ref(), &self.names.borrow());
+        let clips = self.store.clips_for_match(id).unwrap_or_default();
+        self.detail
+            .set(detail.as_ref(), &self.names.borrow(), &clips);
         self.content.set_visible_child_name("match");
         self.header_title.set_visible_child_name("match");
     }

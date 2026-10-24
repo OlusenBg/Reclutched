@@ -248,26 +248,29 @@ pub fn record_args(
     let test = matches!(source, Source::Test);
     let (height, _) = quality(&config.preset);
     let fps = config.fps.clamp(15, 120);
-    let mut caps = format!("video/x-raw,framerate={fps}/1");
+    // `pixel-aspect-ratio=1/1` makes the scaler work out the other side, keeping the picture undistorted.
+    let mut caps = format!("video/x-raw,framerate={fps}/1,pixel-aspect-ratio=1/1");
     if let Some(h) = height {
         caps.push_str(&format!(",height={h}"));
     }
     let mut args = words("-q");
     args.extend(source_args(source));
-    args.extend(words("! videoconvert ! videoscale ! videorate !"));
-    args.push(caps);
-    args.extend(words("! tee name=t"));
-    // The picture: encode and write.
+    // The raw picture is shared by the two branches below, each with its own scaler (a scaler
+    // before the split would be told its size by both and squash the picture).
+    args.extend(words("! videoconvert ! tee name=t"));
+    // The picture: scale, steady frame rate, encode, write.
     args.extend(words(
-        "t. ! queue max-size-time=4000000000 ! videoconvert !",
+        "t. ! queue max-size-time=4000000000 ! videoscale ! videorate !",
     ));
+    args.push(caps);
+    args.extend(words("! videoconvert !"));
     args.extend(encoder.args(bitrate_kbps(&config.preset, fps), fps * 2));
     args.extend(words(
         "! h264parse config-interval=-1 ! queue max-size-time=4000000000 ! sink.video",
     ));
     // A small picture for every piece, for the clip's first frame.
     args.extend(words(
-        "t. ! queue leaky=downstream max-size-buffers=2 ! videorate ! video/x-raw,framerate=1/2 ! videoscale ! video/x-raw,width=320 ! videoconvert ! jpegenc quality=70 ! multifilesink max-files=60",
+        "t. ! queue leaky=downstream max-size-buffers=2 ! videorate ! video/x-raw,framerate=1/2 ! videoscale ! video/x-raw,width=320,pixel-aspect-ratio=1/1 ! videoconvert ! jpegenc quality=70 ! multifilesink max-files=60",
     ));
     args.push(format!("location={}", quote(&ring::thumb_pattern(thumbs))));
     // The sound.
@@ -383,7 +386,13 @@ mod tests {
         );
         let text = line(&args);
         assert!(text.starts_with("-q videotestsrc"), "{text}");
-        assert!(text.contains("video/x-raw,framerate=60/1,height=1080 ! tee name=t"));
+        assert!(text.contains("videoconvert ! tee name=t"));
+        assert!(text.contains(
+            "videoscale ! videorate ! video/x-raw,framerate=60/1,pixel-aspect-ratio=1/1,height=1080 ! videoconvert ! x264enc"
+        ));
+        assert!(
+            text.contains("video/x-raw,width=320,pixel-aspect-ratio=1/1 ! videoconvert ! jpegenc")
+        );
         assert!(text.contains("x264enc bitrate=8000 key-int-max=120"));
         assert!(text.contains("h264parse config-interval=-1"));
         assert!(text.contains("jpegenc quality=70 ! multifilesink max-files=60 location=\"/tmp/r a/thumbs/th%08d.jpg\""));

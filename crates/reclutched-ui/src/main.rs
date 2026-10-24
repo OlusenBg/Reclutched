@@ -22,6 +22,7 @@ mod menu;
 mod notify;
 mod overlay;
 mod panel;
+mod recording;
 mod settings_page;
 mod setup;
 mod shell;
@@ -86,6 +87,12 @@ struct Args {
     /// Developer option: capture a moving test picture instead of the screen.
     #[arg(long, hide = true)]
     capture_test: bool,
+    /// Developer option: show an example pop-up (win, loss or left) a moment after the start.
+    #[arg(long, hide = true)]
+    popup_demo: Option<String>,
+    /// Developer option: save a clip this many seconds after the main page opens.
+    #[arg(long, hide = true)]
+    capture_clip_after: Option<u64>,
     /// Developer option: take a screenshot a few seconds after the main page opens.
     #[arg(long, hide = true)]
     capture_shot_at_start: bool,
@@ -149,12 +156,11 @@ struct App {
     usual_loaded: Cell<bool>,
     /// Screenshots (and later clips): the screen-share session and what it is doing.
     screen: capture::Capture,
-    /// Watches the screenshot key and controller button.
-    shot_keys: RefCell<Option<keys::KeyWatcher>>,
-    /// Screenshots being saved; each answers once.
-    shots: RefCell<Vec<std::sync::mpsc::Receiver<Result<PathBuf, String>>>>,
-    shot_timer_started: Cell<bool>,
+    /// Recording, clips and the capture keys.
+    rec: recording::RecState,
     shot_at_start: Cell<bool>,
+    clip_after: Cell<Option<u64>>,
+    popup_demo: RefCell<Option<String>>,
     /// The pop-up for saved screenshots, clips and matches (made when first needed).
     notifier: RefCell<Option<Rc<notify::Notifier>>>,
 }
@@ -300,6 +306,7 @@ impl App {
         let mut ended = None;
         // Only the newest live picture matters.
         let mut live_news: Option<Option<Box<LiveSnapshot>>> = None;
+        let mut saved_match: Option<(i64, String)> = None;
         for update in updates {
             match update {
                 tracking::Update::Event(TrackEvent::Connected) => {
@@ -308,9 +315,9 @@ impl App {
                 tracking::Update::Event(TrackEvent::Waiting) => {
                     self.set_status(tracking::Status::Waiting);
                 }
-                tracking::Update::Event(TrackEvent::MatchSaved { summary, .. }) => {
+                tracking::Update::Event(TrackEvent::MatchSaved { id, summary }) => {
                     self.usual_loaded.set(false);
-                    self.announce_match(&summary);
+                    saved_match = Some((id, summary));
                     if let Some(view) = self.main_view.borrow().as_ref() {
                         view.reload();
                     }
@@ -323,7 +330,11 @@ impl App {
         }
         if let Some(snapshot) = live_news {
             *self.latest_live.borrow_mut() = snapshot.as_deref().cloned();
+            self.on_live(snapshot.as_deref());
             self.show_live(snapshot);
+        }
+        if let Some((id, summary)) = saved_match {
+            self.on_match_saved(id, &summary);
         }
         // The tracker stopped on its own (for example it could not open the database).
         if let Some(reason) = ended {
@@ -534,42 +545,34 @@ impl App {
         notifier.show(popup, &settings);
     }
 
-    /// The pop-up for the match that was just saved.
-    fn announce_match(&self, summary: &str) {
-        let popup = Store::open(&self.db_path)
-            .ok()
-            .and_then(|store| store.recent_matches(1).ok())
-            .and_then(|rows| rows.into_iter().next())
-            .map(|row| {
-                let names = default_map_path()
-                    .and_then(|p| {
-                        reclutched_core::rocketleague::playlist::PlaylistMap::load(&p).ok()
-                    })
-                    .unwrap_or_else(
-                        reclutched_core::rocketleague::playlist::PlaylistMap::with_builtin,
-                    );
-                let outcome = match row.result.as_str() {
-                    "win" => notify::Outcome::Win,
-                    "loss" => notify::Outcome::Loss,
-                    _ => notify::Outcome::LeftEarly,
-                };
-                notify::Popup::saved_match(
-                    &format::mode_name(&names, row.playlist_id),
-                    &format::score_text(&row),
-                    outcome,
-                )
-            });
-        match popup {
-            Some(popup) => self.announce(&popup),
-            None => self.toast(&format!("Saved: {summary}")),
-        }
+    /// The pop-up for the match that was just saved (from the newest match in the database).
+    fn match_popup(&self) -> Option<notify::Popup> {
+        let row = Store::open(&self.db_path)
+            .ok()?
+            .recent_matches(1)
+            .ok()?
+            .into_iter()
+            .next()?;
+        let names = default_map_path()
+            .and_then(|p| reclutched_core::rocketleague::playlist::PlaylistMap::load(&p).ok())
+            .unwrap_or_else(reclutched_core::rocketleague::playlist::PlaylistMap::with_builtin);
+        let outcome = match row.result.as_str() {
+            "win" => notify::Outcome::Win,
+            "loss" => notify::Outcome::Loss,
+            _ => notify::Outcome::LeftEarly,
+        };
+        Some(notify::Popup::saved_match(
+            &format::mode_name(&names, row.playlist_id),
+            &format::score_text(&row),
+            outcome,
+        ))
     }
 
     /// Turns capturing on or off. On: the desktop may ask what to share.
     fn turn_capture(self: &Rc<Self>, on: bool) {
         if on {
             self.screen.turn_on();
-            self.watch_screenshot_keys();
+            self.watch_capture();
         } else {
             self.screen.turn_off();
         }
@@ -581,6 +584,30 @@ impl App {
         if settings.capture_enabled {
             self.turn_capture(true);
         }
+        if let Some(which) = self.popup_demo.take() {
+            let app = Rc::downgrade(self);
+            gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
+                let Some(app) = app.upgrade() else { return };
+                let outcome = match which.as_str() {
+                    "loss" => notify::Outcome::Loss,
+                    "left" => notify::Outcome::LeftEarly,
+                    _ => notify::Outcome::Win,
+                };
+                app.announce(&notify::Popup::saved_match(
+                    "Casual Duel",
+                    "4 \u{2013} 2",
+                    outcome,
+                ));
+            });
+        }
+        if let Some(seconds) = self.clip_after.take() {
+            let app = Rc::downgrade(self);
+            gtk::glib::timeout_add_local_once(Duration::from_secs(seconds), move || {
+                if let Some(app) = app.upgrade() {
+                    app.make_clip(triggers::Trigger::Key);
+                }
+            });
+        }
         if self.shot_at_start.replace(false) {
             let app = Rc::downgrade(self);
             gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
@@ -589,82 +616,6 @@ impl App {
                 }
             });
         }
-    }
-
-    /// Saves a screenshot and says where it went (or why not).
-    fn take_screenshot(self: &Rc<Self>) {
-        let settings = Settings::load(&self.settings_path).unwrap_or_default();
-        let Some(folder) = settings.capture_folder() else {
-            self.toast("No folder to save screenshots in (set one in Settings, Capture)");
-            return;
-        };
-        let stamp = gtk::glib::DateTime::now_local()
-            .ok()
-            .and_then(|now| now.format("%Y-%m-%d %H-%M-%S").ok())
-            .map_or_else(|| "screenshot".to_string(), |s| s.to_string());
-        let answer = self.screen.screenshot(folder, &stamp);
-        self.shots.borrow_mut().push(answer);
-    }
-
-    /// Follows the screenshot key and button, and reports finished screenshots.
-    fn watch_screenshot_keys(self: &Rc<Self>) {
-        if self.shot_timer_started.replace(true) {
-            return;
-        }
-        let app = Rc::downgrade(self);
-        let ticks = Cell::new(0u32);
-        gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
-            let Some(app) = app.upgrade() else {
-                return gtk::glib::ControlFlow::Break;
-            };
-            // Every couple of seconds: start or retune the watcher from the saved settings.
-            if ticks.get().is_multiple_of(20) {
-                let settings = Settings::load(&app.settings_path).unwrap_or_default();
-                let wanted = settings.capture_enabled
-                    && (!settings.screenshot_key.is_empty()
-                        || !settings.screenshot_button.is_empty());
-                let mut watcher = app.shot_keys.borrow_mut();
-                match (watcher.as_ref(), wanted) {
-                    (None, true) => {
-                        *watcher = Some(keys::KeyWatcher::start(
-                            &settings.screenshot_key,
-                            &settings.screenshot_button,
-                        ));
-                    }
-                    (Some(w), true) => {
-                        w.set_bindings(&settings.screenshot_key, &settings.screenshot_button);
-                    }
-                    // Not wanted any more: dropping the watcher closes its readers.
-                    (Some(_), false) => *watcher = None,
-                    (None, false) => {}
-                }
-            }
-            ticks.set(ticks.get().wrapping_add(1));
-            let pressed = app.shot_keys.borrow().as_ref().is_some_and(|w| {
-                w.drain()
-                    .iter()
-                    .any(|e| matches!(e, keys::KeyEvent::Pressed(_)))
-            });
-            if pressed {
-                app.take_screenshot();
-            }
-            let mut finished = Vec::new();
-            app.shots.borrow_mut().retain(|rx| match rx.try_recv() {
-                Ok(result) => {
-                    finished.push(result);
-                    false
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => true,
-                Err(_) => false,
-            });
-            for result in finished {
-                match result {
-                    Ok(path) => app.announce(&notify::Popup::screenshot(path)),
-                    Err(e) => app.toast(&format!("Screenshot failed: {e}")),
-                }
-            }
-            gtk::glib::ControlFlow::Continue
-        });
     }
 
     /// For the settings page: listens for the next controller button (up to 12 seconds).
@@ -869,6 +820,13 @@ impl App {
                         }
                     })
                 },
+                recording: {
+                    let weak = weak.clone();
+                    Rc::new(move || {
+                        weak.upgrade()
+                            .map_or_else(String::new, |app| app.recording_text())
+                    })
+                },
                 preview: Rc::new(move || {
                     if let Some(app) = weak.upgrade() {
                         app.announce(&notify::Popup::saved_match(
@@ -1022,10 +980,10 @@ fn activate(application: &adw::Application, args: &Args) {
                 .join("capture_token"),
             args.capture_test,
         ),
-        shot_keys: RefCell::new(None),
-        shots: RefCell::new(Vec::new()),
-        shot_timer_started: Cell::new(false),
+        rec: recording::RecState::default(),
         shot_at_start: Cell::new(args.capture_shot_at_start),
+        clip_after: Cell::new(args.capture_clip_after),
+        popup_demo: RefCell::new(args.popup_demo.clone()),
         notifier: RefCell::new(None),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped

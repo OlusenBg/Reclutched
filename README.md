@@ -146,24 +146,37 @@ status light's corner and how solid it is, which parts of the in-game panel show
 **Capture**, **Rocket League** (game folder, Stats API), **Tracking** (what to collect), **Data** (files, wipe
 data, run the setup again) and **About**.
 
-### Capturing (screenshots, in progress)
+### Capturing: screenshots, clips and match recordings
 
-Settings → **Capture** turns on screenshots; clips and match recording are coming in the next steps. It uses
-your desktop's own screen-share portal, so it works on Wayland and X11 without anything injected into the game:
-the first time, your desktop asks what to share (your screen or the game window) and remembers the answer.
-Then press the screenshot key (F9 by default) or a controller button, a small card slides down from the top of
-the screen (over the game; you can change where, how long or turn it off), and the picture is saved in
-`~/Videos/Reclutched/Screenshots` (change the folder in the same page).
+Settings → **Capture** turns it on. Reclutched uses your desktop's own screen-share portal, so it works on
+Wayland and X11 without anything injected into the game: the first time, your desktop asks what to share (pick
+the game window to have it follow the game, or a screen) and remembers the answer.
 
-It needs GStreamer with the PipeWire plugin and a working screen-share portal for your desktop
-(`xdg-desktop-portal-hyprland`, `-kde`, `-gnome` or `-wlr`):
+- **Screenshot:** press the screenshot key (F9 by default) or a controller button.
+- **Clips:** while capturing is on and the game is connected, the last minute is kept in a temporary folder
+  (`~/.cache/reclutched`), so a clip can start *before* you press the key. Press the clip key (F10 by default) to
+  save the last 10 to 50 seconds you chose. Clips can also be made automatically when **you** score, make a
+  save, demolish someone or the match ends (each one a switch); automatic clips keep three seconds after the
+  moment. Choose Manual, Automatic or Both.
+- **Whole matches:** choose "Every match, start to finish" and each match is saved as one video when it ends.
+  You can have recordings older than a number of days deleted.
+- **Sound:** the game's sound, your microphone, both (mixed) or none.
+- **Quality:** low (720p), medium (1080p) or high (your screen's own size) at 30 or 60 frames per second.
+  The video encoder is picked by itself: your GPU's (VA-API for AMD and Intel, NVENC for NVIDIA) when it works,
+  otherwise x264 in software.
+- **Where it goes:** `~/Videos/Reclutched/{Screenshots,Clips,Matches}` (change the folder in the same page).
+  Everything taken during a match also shows on that match's page in the Tracking tab, and the latest ones
+  slide by on the Main Menu. A small card slides down from the top of the screen, over the game, when something
+  is saved (you can change where, how long or turn it off).
+
+It needs GStreamer, PipeWire and a screen-share portal for your desktop (`xdg-desktop-portal-hyprland`, `-kde`,
+`-gnome` or `-wlr`). Settings → Capture shows what is missing:
 
 ```bash
-sudo pacman -S --needed gstreamer gst-plugins-base gst-plugins-good gst-plugin-pipewire xdg-desktop-portal
+sudo pacman -S --needed gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav gst-plugin-pipewire gst-plugin-va xdg-desktop-portal
 ```
 
-The key is read the same way as the overlay key, so the same `input` group permission applies. Settings →
-Capture shows what is missing if something is.
+The keys are read the same way as the overlay key, so the same `input` group permission applies.
 
 ### Turn on the Stats API
 
@@ -200,7 +213,7 @@ Run only one of the app or `reclutched track` at a time.
 | 2. Desktop app (UI/UX) | Done in v1.0.0: setup, history, details, live window and settings |
 | 3. Overlay | Done in v1.0.0 (Hyprland tested; other Wayland desktops need testing) |
 | 4. Home, calendar and graphs | Done in v1.1 (also Sway and niri window detection for the overlay) |
-| 5. Capturing and clipping | Planned next (will use an existing recorder) |
+| 5. Capturing and clipping | In v2.0.0: screenshots, clips and match recordings |
 
 ## Project layout
 

@@ -46,6 +46,11 @@ impl Capture {
         }
     }
 
+    /// A test picture stands in for the screen (`--capture-test`).
+    pub fn is_test(&self) -> bool {
+        self.portal.is_none()
+    }
+
     pub fn turn_on(&self) {
         match &self.portal {
             Some(portal) => portal.begin(),

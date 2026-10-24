@@ -13,6 +13,7 @@ pub const KEEP_PIECES: u64 = 34;
 /// MPEG-TS is made of packets of this many bytes; a half-written file is cut to whole packets.
 const TS_PACKET: u64 = 188;
 
+#[cfg(test)]
 pub fn segment_name(index: u64) -> String {
     format!("seg{index:08}.ts")
 }

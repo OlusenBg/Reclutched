@@ -3,7 +3,7 @@
 
 use adw::prelude::*;
 use reclutched_core::rocketleague::playlist::PlaylistMap;
-use reclutched_core::rocketleague::storage::MatchDetail;
+use reclutched_core::rocketleague::storage::{ClipRow, MatchDetail};
 use reclutched_core::rocketleague::tracker::{
     GoalRow, MovementSummary, PlayerSummary, TouchSummary,
 };
@@ -77,12 +77,13 @@ impl DetailView {
         }
     }
 
-    pub fn set(&self, detail: Option<&MatchDetail>, names: &PlaylistMap) {
+    pub fn set(&self, detail: Option<&MatchDetail>, names: &PlaylistMap, clips: &[ClipRow]) {
         for b in [&self.overview, &self.players, &self.goals, &self.movement] {
             clear(b);
         }
         let Some(d) = detail else { return };
         self.fill_overview(d, names);
+        self.fill_clips(clips);
         self.fill_players(d);
         self.fill_goals(d);
         self.fill_movement(d);
@@ -234,6 +235,39 @@ impl DetailView {
         if rows > 0 {
             b.append(&card);
         }
+    }
+
+    /// The screenshots, clips and recording of this match, under the overview.
+    fn fill_clips(&self, clips: &[ClipRow]) {
+        if clips.is_empty() {
+            return;
+        }
+        let b = &self.overview;
+        b.append(&section("Clips and screenshots"));
+        let grid = gtk::FlowBox::builder()
+            .selection_mode(gtk::SelectionMode::None)
+            .min_children_per_line(1)
+            .max_children_per_line(3)
+            .column_spacing(14)
+            .row_spacing(14)
+            .homogeneous(true)
+            .margin_top(10)
+            .build();
+        for clip in clips {
+            let media = crate::gallery::Media {
+                path: clip.path.clone().into(),
+                kind: match clip.kind.as_str() {
+                    "screenshot" => crate::gallery::Kind::Screenshot,
+                    "match" => crate::gallery::Kind::Match,
+                    _ => crate::gallery::Kind::Clip,
+                },
+                modified: std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(clip.taken_at.max(0) as u64),
+                thumb: clip.thumb.clone().map(Into::into),
+            };
+            grid.append(&crate::gallery::tile(&media));
+        }
+        b.append(&grid);
     }
 
     fn fill_players(&self, d: &MatchDetail) {

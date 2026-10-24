@@ -114,15 +114,6 @@ impl Recorder {
     pub fn latest(&self) -> Option<u64> {
         ring::latest(&self.ring)
     }
-
-    /// Throws away old pieces (keeping the window for clips, and a running match).
-    pub fn prune(&self, match_started_at: Option<u64>) {
-        if let Some(latest) = self.latest() {
-            let keep = ring::keep_from(latest, match_started_at);
-            ring::prune_before(&self.ring, keep);
-            ring::prune_thumbs(&self.thumbs, keep);
-        }
-    }
 }
 
 impl Drop for Recorder {
@@ -276,6 +267,32 @@ mod tests {
         assert!(size > 10_000, "clip is {size} bytes");
         let picture = std::fs::read(saved.thumb.as_ref().expect("a first-frame picture")).unwrap();
         assert!(picture.starts_with(&[0xFF, 0xD8]), "not a JPEG");
+        // The picture keeps its shape (16:9 in, 16:9 out).
+        if let Ok(probe) = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&out)
+            .output()
+        {
+            if probe.status.success() {
+                let text = String::from_utf8_lossy(&probe.stdout).trim().to_string();
+                let sizes: Vec<u32> = text.split(',').filter_map(|n| n.parse().ok()).collect();
+                assert_eq!(sizes.len(), 2, "{text}");
+                assert_eq!(
+                    sizes[0] * 9,
+                    sizes[1] * 16,
+                    "{name}: the picture was squashed: {text}"
+                );
+            }
+        }
         if let Ok(probe) = std::process::Command::new("ffprobe")
             .args([
                 "-v",

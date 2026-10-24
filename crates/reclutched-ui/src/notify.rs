@@ -221,6 +221,15 @@ fn card(popup: &Popup) -> gtk::Box {
             .build(),
     );
     row.append(&text);
+    // A recorded match shows its first frame on the left and the result badge on the right.
+    if popup.image.is_some() {
+        if let Some(outcome) = popup.outcome {
+            let small = badge(outcome);
+            small.set_content_width(56);
+            small.set_content_height(56);
+            row.append(&small);
+        }
+    }
     row
 }
 
