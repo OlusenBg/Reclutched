@@ -328,3 +328,129 @@ button.cal-day.heat8, .cal-swatch.heat8 { animation: cal-pulse 1.3s ease-in-out 
 .notify-title { font-size: 17px; font-weight: 600; color: #f1ecea; }
 .notify-sub { font-size: 12px; color: #a2989a; }
 .gallery-play-over { color: rgba(255, 255, 255, 0.9); background: rgba(0, 0, 0, 0.45); border-radius: 999px; padding: 8px; }
+
+/* ---------- settings polish ----------
+   Written with extra weight so a themed ~/.config/gtk-4.0/gtk.css (outlines, borders, accent
+   colours) cannot make these controls look different from one computer to the next. */
+window.rc-window.rc-window list.settings-nav > row {
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    border-radius: 12px;
+    padding: 0;
+    margin: 0 0 4px 0;
+    min-height: 40px;
+    color: #b3a9a6;
+    transition: background 120ms ease, color 120ms ease;
+}
+window.rc-window.rc-window list.settings-nav > row > label {
+    background: none;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    padding: 10px 16px;
+    margin: 0;
+}
+window.rc-window.rc-window list.settings-nav > row:hover { background: rgba(255, 255, 255, 0.045); color: #e9e3e1; }
+window.rc-window.rc-window list.settings-nav > row:selected { background: rgba(163, 38, 48, 0.22); color: #ffffff; }
+window.rc-window.rc-window list.settings-nav > row:selected:hover { background: rgba(163, 38, 48, 0.28); }
+window.rc-window.rc-window list.settings-nav > row:focus,
+window.rc-window.rc-window list.settings-nav > row:focus-visible { outline: none; box-shadow: none; }
+
+/* The groups: one soft card per group, thin dividers between rows, no double borders. */
+window.rc-window.rc-window preferencesgroup list.boxed-list,
+window.rc-window.rc-window preferencesgroup > box > list {
+    background: #1a1515;
+    background-image: none;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    box-shadow: none;
+    outline: none;
+}
+window.rc-window.rc-window preferencesgroup list > row {
+    background: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    border-radius: 0;
+    min-height: 54px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+window.rc-window.rc-window preferencesgroup list > row:not(:last-child) { border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+window.rc-window.rc-window preferencesgroup list > row:first-child { border-top-left-radius: 15px; border-top-right-radius: 15px; }
+window.rc-window.rc-window preferencesgroup list > row:last-child { border-bottom-left-radius: 15px; border-bottom-right-radius: 15px; }
+window.rc-window.rc-window preferencesgroup list > row:hover { background: rgba(255, 255, 255, 0.025); }
+window.rc-window.rc-window preferencesgroup list > row:focus,
+window.rc-window.rc-window preferencesgroup list > row:focus-visible { outline: none; box-shadow: none; }
+window.rc-window.rc-window preferencesgroup list > row .title { color: #e9e3e1; font-size: 14px; }
+window.rc-window.rc-window preferencesgroup list > row .subtitle { color: #8b817e; font-size: 12px; }
+window.rc-window.rc-window preferencesgroup list > row.entry text,
+window.rc-window.rc-window preferencesgroup list > row entry { background: transparent; border: none; box-shadow: none; outline: none; }
+
+/* Switches: a quiet pill that turns the app's red, whatever the system accent is. */
+window.rc-window.rc-window switch {
+    background: #2e2626;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-width: 46px;
+    min-height: 26px;
+    border-radius: 999px;
+    transition: background 150ms ease;
+}
+window.rc-window.rc-window switch:checked { background: #b02a36; }
+window.rc-window.rc-window switch:disabled { opacity: 0.45; }
+window.rc-window.rc-window switch slider {
+    background: #efe9e7;
+    background-image: none;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+    outline: none;
+    min-width: 20px;
+    min-height: 20px;
+    margin: 3px;
+    border-radius: 999px;
+}
+
+/* Buttons and drop-downs in the groups. */
+window.rc-window.rc-window preferencesgroup button:not(.flat):not(.circular):not(.destructive-action):not(.suggested-action) {
+    background: rgba(255, 255, 255, 0.07);
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    border-radius: 999px;
+    padding: 6px 16px;
+    color: #e9e3e1;
+}
+window.rc-window.rc-window preferencesgroup button:not(.flat):not(.circular):hover { background: rgba(255, 255, 255, 0.12); }
+window.rc-window.rc-window preferencesgroup button.flat { border-radius: 999px; }
+window.rc-window.rc-window preferencesgroup button.destructive-action { background: #b02a36; background-image: none; border: none; box-shadow: none; border-radius: 999px; padding: 6px 16px; color: #fff; }
+window.rc-window.rc-window preferencesgroup button.destructive-action:hover { background: #c2303c; }
+window.rc-window.rc-window preferencesgroup button.suggested-action { background: #a32630; background-image: none; border: none; box-shadow: none; border-radius: 999px; padding: 6px 16px; color: #fff; }
+window.rc-window.rc-window preferencesgroup scale trough { background: #2e2626; border: none; min-height: 6px; border-radius: 999px; }
+window.rc-window.rc-window preferencesgroup scale highlight { background: #b02a36; border: none; border-radius: 999px; }
+window.rc-window.rc-window preferencesgroup scale slider { background: #efe9e7; border: none; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); min-width: 18px; min-height: 18px; border-radius: 999px; }
+window.rc-window.rc-window preferencesgroup spinbutton { background: transparent; border: none; box-shadow: none; }
+window.rc-window.rc-window .settings-title { color: #e9e3e1; }
+window.rc-window.rc-window preferencesgroup > box > label.heading,
+window.rc-window.rc-window preferencesgroup .heading { color: #e9e3e1; font-size: 15px; font-weight: 600; }
+window.rc-window.rc-window preferencesgroup .description { color: #8b817e; font-size: 13px; }
+
+/* ---------- update button ---------- */
+window.rc-window.rc-window button.update-pill {
+    background: rgba(163, 38, 48, 0.9);
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    color: #ffffff;
+    border-radius: 999px;
+    padding: 5px 16px;
+    font-weight: 600;
+    font-size: 13px;
+}
+window.rc-window.rc-window button.update-pill:hover { background: #c2303c; }

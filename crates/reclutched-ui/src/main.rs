@@ -32,6 +32,8 @@ mod summary;
 mod tracking;
 mod trends;
 mod triggers;
+mod update;
+mod updating;
 mod widgets;
 mod wipe;
 
@@ -87,6 +89,12 @@ struct Args {
     /// Developer option: capture a moving test picture instead of the screen.
     #[arg(long, hide = true)]
     capture_test: bool,
+    /// Developer option: act as if a new version had been found.
+    #[arg(long, hide = true)]
+    update_demo: bool,
+    /// Developer option: erase everything a few seconds after the start (to try the reset).
+    #[arg(long, hide = true)]
+    reset_demo: bool,
     /// Developer option: show an example pop-up (win, loss or left) a moment after the start.
     #[arg(long, hide = true)]
     popup_demo: Option<String>,
@@ -158,9 +166,13 @@ struct App {
     screen: capture::Capture,
     /// Recording, clips and the capture keys.
     rec: recording::RecState,
+    /// Looking for and installing new versions.
+    upd: updating::UpdateState,
     shot_at_start: Cell<bool>,
     clip_after: Cell<Option<u64>>,
     popup_demo: RefCell<Option<String>>,
+    reset_demo: Cell<bool>,
+    update_demo: Cell<bool>,
     /// The pop-up for saved screenshots, clips and matches (made when first needed).
     notifier: RefCell<Option<Rc<notify::Notifier>>>,
 }
@@ -221,14 +233,23 @@ impl App {
                 app.toggle_tracking();
             }
         });
+        let updating = Rc::downgrade(self);
+        let on_update: Rc<dyn Fn()> = Rc::new(move || {
+            if let Some(app) = updating.upgrade() {
+                app.update_clicked();
+            }
+        });
         let view = shell::Shell::new(
             &self.window,
             store,
             default_map_path(),
             self.settings_path.clone(),
-            on_settings,
-            on_calendar,
-            on_toggle,
+            shell::Hooks {
+                on_settings,
+                on_calendar,
+                on_toggle_tracking: on_toggle,
+                on_update,
+            },
         );
         self.set_page("main", view.widget.upcast_ref());
         self.pages.set_visible_child_name("main");
@@ -245,6 +266,7 @@ impl App {
         }
         self.watch_tracking();
         self.start_capture_if_wanted();
+        self.watch_updates();
     }
 
     fn set_status(&self, status: tracking::Status) {
@@ -584,6 +606,17 @@ impl App {
         if settings.capture_enabled {
             self.turn_capture(true);
         }
+        if self.update_demo.take() {
+            self.pretend_update_found();
+        }
+        if self.reset_demo.take() {
+            let app = Rc::downgrade(self);
+            gtk::glib::timeout_add_local_once(Duration::from_secs(3), move || {
+                if let Some(app) = app.upgrade() {
+                    app.reset_everything(false);
+                }
+            });
+        }
         if let Some(which) = self.popup_demo.take() {
             let app = Rc::downgrade(self);
             gtk::glib::timeout_add_local_once(Duration::from_secs(2), move || {
@@ -787,6 +820,39 @@ impl App {
                 let weak = weak.clone();
                 Rc::new(move || weak.upgrade().and_then(|app| app.key_devices()))
             },
+            updates: settings_page::UpdateHooks {
+                status: {
+                    let weak = weak.clone();
+                    Rc::new(move || {
+                        weak.upgrade()
+                            .map_or_else(String::new, |app| app.update_status_text())
+                    })
+                },
+                check_now: {
+                    let weak = weak.clone();
+                    Rc::new(move || {
+                        if let Some(app) = weak.upgrade() {
+                            app.check_updates_now();
+                        }
+                    })
+                },
+                update_now: {
+                    let weak = weak.clone();
+                    Rc::new(move || {
+                        if let Some(app) = weak.upgrade() {
+                            app.update_clicked();
+                        }
+                    })
+                },
+            },
+            reset: {
+                let weak = weak.clone();
+                Rc::new(move |delete_media| {
+                    if let Some(app) = weak.upgrade() {
+                        app.reset_everything(delete_media);
+                    }
+                })
+            },
             capture: settings_page::CaptureHooks {
                 status: {
                     let weak = weak.clone();
@@ -981,9 +1047,12 @@ fn activate(application: &adw::Application, args: &Args) {
             args.capture_test,
         ),
         rec: recording::RecState::default(),
+        upd: updating::UpdateState::default(),
         shot_at_start: Cell::new(args.capture_shot_at_start),
         clip_after: Cell::new(args.capture_clip_after),
         popup_demo: RefCell::new(args.popup_demo.clone()),
+        reset_demo: Cell::new(args.reset_demo),
+        update_demo: Cell::new(args.update_demo),
         notifier: RefCell::new(None),
     });
     // The window must keep `app` (and with it the wizard) alive. Without this, `app` is dropped

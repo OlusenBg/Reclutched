@@ -148,6 +148,13 @@ pub struct Settings {
     pub capture_quality: String,
     /// Full match recordings older than this many days are deleted (0 keeps them).
     pub full_delete_days: u32,
+    /// Look for a new version now and then.
+    pub update_check: bool,
+    /// Build and install a new version by itself (when the game is not running), then ask for a
+    /// restart.
+    pub update_auto_install: bool,
+    /// Where updates come from: "auto" (the branch this build came from), "main" or "dev".
+    pub update_channel: String,
 }
 
 impl Default for Settings {
@@ -201,6 +208,9 @@ impl Default for Settings {
             capture_fps: 60,
             capture_quality: "medium".to_string(),
             full_delete_days: 0,
+            update_check: true,
+            update_auto_install: false,
+            update_channel: "auto".to_string(),
         }
     }
 }

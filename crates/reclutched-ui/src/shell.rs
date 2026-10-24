@@ -25,12 +25,23 @@ const TABS: [(Tab, &str, &str); 3] = [
     (Tab::Capturing, "capturing", "Capturing"),
 ];
 
+/// What the buttons of the top bar do.
+pub struct Hooks {
+    pub on_settings: Rc<dyn Fn()>,
+    pub on_calendar: Rc<dyn Fn()>,
+    pub on_toggle_tracking: Rc<dyn Fn()>,
+    pub on_update: Rc<dyn Fn()>,
+}
+
 pub struct Shell {
     pub widget: adw::ToolbarView,
     stack: gtk::Stack,
     tabs: Vec<(Tab, gtk::ToggleButton)>,
     light: gtk::Button,
     dot: gtk::Box,
+    update: gtk::Button,
+    update_label: gtk::Label,
+    update_spinner: gtk::Spinner,
     tracking: Rc<MainView>,
     menu: Rc<MainMenu>,
     /// Set while we switch tabs ourselves, so the buttons do not answer twice.
@@ -43,10 +54,14 @@ impl Shell {
         store: Rc<Store>,
         names_path: Option<PathBuf>,
         settings_path: PathBuf,
-        on_settings: Rc<dyn Fn()>,
-        on_calendar: Rc<dyn Fn()>,
-        on_toggle_tracking: Rc<dyn Fn()>,
+        hooks: Hooks,
     ) -> Rc<Self> {
+        let Hooks {
+            on_settings,
+            on_calendar,
+            on_toggle_tracking,
+            on_update,
+        } = hooks;
         let tracking = MainView::new(
             window,
             store.clone(),
@@ -108,9 +123,24 @@ impl Shell {
             .build();
         gear.connect_clicked(move |_| on_settings());
 
+        // Shown only when there is something to do about an update.
+        let update_label = gtk::Label::new(None);
+        let update_spinner = gtk::Spinner::builder().visible(false).build();
+        let update_row = gtk::Box::builder().spacing(8).build();
+        update_row.append(&update_spinner);
+        update_row.append(&update_label);
+        let update = gtk::Button::builder()
+            .child(&update_row)
+            .css_classes(["update-pill"])
+            .valign(gtk::Align::Center)
+            .visible(false)
+            .build();
+        update.connect_clicked(move |_| on_update());
+
         let header = adw::HeaderBar::new();
         header.set_title_widget(Some(&title_row));
         header.pack_end(&gear);
+        header.pack_end(&update);
         let widget = adw::ToolbarView::new();
         widget.add_top_bar(&header);
         widget.set_content(Some(&stack));
@@ -121,6 +151,9 @@ impl Shell {
             tabs,
             light,
             dot,
+            update,
+            update_label,
+            update_spinner,
             tracking,
             menu,
             switching: Cell::new(false),
@@ -163,6 +196,19 @@ impl Shell {
             self.dot.remove_css_class(class);
         }
         self.dot.add_css_class(status.css_class());
+    }
+
+    /// Shows the update button with this text (and a spinner while `busy`), or hides it.
+    pub fn set_update(&self, state: Option<(&str, bool)>) {
+        match state {
+            Some((text, busy)) => {
+                self.update_label.set_text(text);
+                self.update_spinner.set_visible(busy);
+                self.update_spinner.set_spinning(busy);
+                self.update.set_visible(true);
+            }
+            None => self.update.set_visible(false),
+        }
     }
 
     /// Reads everything again.

@@ -85,6 +85,13 @@ fn stamp() -> String {
         .map_or_else(|| "capture".to_string(), |s| s.to_string())
 }
 
+impl RecState {
+    /// The running recorder (dropping it stops the recording).
+    pub(crate) fn recorder_slot(&self) -> std::cell::RefMut<'_, Option<Recorder>> {
+        self.recorder.borrow_mut()
+    }
+}
+
 impl App {
     /// Starts the 100 ms timer that serves the capture keys, the recording and finished jobs.
     pub(crate) fn watch_capture(self: &Rc<Self>) {

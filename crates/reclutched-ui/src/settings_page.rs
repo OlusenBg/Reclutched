@@ -137,6 +137,14 @@ impl SectionPage {
     }
 }
 
+/// What the About section needs to check for and install updates.
+#[derive(Clone)]
+pub struct UpdateHooks {
+    pub status: Rc<dyn Fn() -> String>,
+    pub check_now: Rc<dyn Fn()>,
+    pub update_now: Rc<dyn Fn()>,
+}
+
 /// What the Capture section needs from the app.
 #[derive(Clone)]
 pub struct CaptureHooks {
@@ -167,6 +175,10 @@ pub struct Hooks {
     /// The keyboards and controllers we read right now, when the watcher runs.
     pub devices: Rc<dyn Fn() -> Option<(keys::Devices, keys::KeyAccess)>>,
     pub capture: CaptureHooks,
+    pub updates: UpdateHooks,
+    /// Erases everything and starts like a new user (`true`: also delete the screenshots and
+    /// videos).
+    pub reset: Rc<dyn Fn(bool)>,
 }
 
 /// Builds the settings page. It is shown inside the main window with a back arrow, and changes
@@ -516,6 +528,8 @@ pub fn build(
     data.add(&rerun);
     data_page.add(&data);
     about_page.add(&about_group());
+    about_page.add(&updates_group(&path, &current, &on_error, &hooks));
+    data_page.add(&reset_group(parent, &hooks));
     data_page.add(&crate::wipe::group(
         parent,
         db_path.clone(),
@@ -1008,11 +1022,140 @@ fn overlay_groups(
     vec![pill, panel, window]
 }
 
+/// Version, and finding and installing new versions.
+fn updates_group(
+    path: &Rc<PathBuf>,
+    current: &Settings,
+    on_error: &Rc<dyn Fn(&str)>,
+    hooks: &Hooks,
+) -> adw::PreferencesGroup {
+    use crate::update;
+    let group = adw::PreferencesGroup::builder()
+        .title("Updates")
+        .description("Reclutched can find a new version by itself and install it, so you never need the terminal.")
+        .build();
+    group.add(
+        &adw::ActionRow::builder()
+            .title("This version")
+            .subtitle(format!(
+                "{}  \u{00B7}  build {} on {}",
+                update::VERSION,
+                update::short(update::COMMIT),
+                update::BRANCH
+            ))
+            .subtitle_selectable(true)
+            .build(),
+    );
+    let status = adw::ActionRow::builder().title("Status").build();
+    status.set_subtitle(&(hooks.updates.status)());
+    let check = gtk::Button::builder()
+        .label("Check now")
+        .valign(gtk::Align::Center)
+        .build();
+    let install = gtk::Button::builder()
+        .label("Update")
+        .valign(gtk::Align::Center)
+        .css_classes(["suggested-action"])
+        .build();
+    status.add_suffix(&check);
+    status.add_suffix(&install);
+    {
+        let f = hooks.updates.check_now.clone();
+        check.connect_clicked(move |_| f());
+        let f = hooks.updates.update_now.clone();
+        install.connect_clicked(move |_| f());
+    }
+    {
+        let (weak, text) = (status.downgrade(), hooks.updates.status.clone());
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(700), move || {
+            let Some(row) = weak.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            row.set_subtitle(&text());
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+    group.add(&status);
+    group.add(&switch_row(
+        "Look for updates by itself",
+        "Now and then while the app is open",
+        current.update_check,
+        path,
+        on_error,
+        |s, v| s.update_check = v,
+    ));
+    group.add(&switch_row(
+        "Install updates by itself",
+        "Builds in the background when the game is not running, then asks you to restart",
+        current.update_auto_install,
+        path,
+        on_error,
+        |s, v| s.update_auto_install = v,
+    ));
+    group.add(&combo_row(
+        "Get updates from",
+        "",
+        &UPDATE_CHANNELS,
+        &current.update_channel,
+        path,
+        on_error,
+        |s, v| s.update_channel = v,
+    ));
+    group
+}
+
+const UPDATE_CHANNELS: [(&str, &str); 3] = [
+    ("auto", "Same as this version"),
+    ("main", "Releases (main)"),
+    ("dev", "Development (dev, newest first)"),
+];
+
+/// "Reset Reclutched": the way back to a first launch.
+fn reset_group(parent: &adw::ApplicationWindow, hooks: &Hooks) -> adw::PreferencesGroup {
+    let group = adw::PreferencesGroup::builder()
+        .title("Reset")
+        .description("Start again like a new user.")
+        .build();
+    let row = adw::ActionRow::builder()
+        .title("Reset Reclutched")
+        .subtitle("Erases your settings, username, matches, clips list and the setup, then greets you from the start")
+        .build();
+    let button = gtk::Button::builder()
+        .label("Reset\u{2026}")
+        .valign(gtk::Align::Center)
+        .css_classes(["destructive-action"])
+        .build();
+    row.add_suffix(&button);
+    group.add(&row);
+    let (parent, reset) = (parent.clone(), hooks.reset.clone());
+    button.connect_clicked(move |_| {
+        let dialog = adw::AlertDialog::builder()
+            .heading("Reset Reclutched?")
+            .body("This permanently erases your settings, your username, every saved match and the list of your clips, and shows the first-launch setup again. It cannot be undone.")
+            .build();
+        let media = gtk::CheckButton::with_label(
+            "Also delete my screenshots, clips and match recordings",
+        );
+        dialog.set_extra_child(Some(&media));
+        dialog.add_responses(&[("cancel", "Cancel"), ("reset", "Erase everything")]);
+        dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        let reset = reset.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response == "reset" {
+                reset(media.is_active());
+            }
+        });
+        dialog.present(Some(&parent));
+    });
+    group
+}
+
 /// Version, licence and what the app promises about your data.
 fn about_group() -> adw::PreferencesGroup {
     let group = adw::PreferencesGroup::builder().title("Reclutched").build();
     for (title, value) in [
-        ("Version", env!("CARGO_PKG_VERSION").to_string()),
         ("Licence", "GNU GPL v3 or later".to_string()),
         (
             "Privacy",

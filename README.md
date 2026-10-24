@@ -138,13 +138,25 @@ windowrule = opaque, class:^(dev.reclutched.Reclutched)$
 Settings shows the Lua line with a copy button when it runs under Hyprland. The in-game overlay is transparent
 on purpose and is not affected. The app also stays dark and solid under themed `~/.config/gtk-4.0/gtk.css` files.
 
+### Updating
+
+Reclutched can update itself. Settings → About → Updates shows your version, looks for a new one on GitHub
+(by itself every few hours, or when you press **Check now**) and, when there is one, an **Update available**
+button appears at the top. Pressing it fetches the new source, builds it in the background (a few minutes, you can
+keep using the app) and then asks you to restart. You can let it install updates by itself when the game is not
+running, and choose where updates come from (the same branch as your build, `main` or `dev`).
+
+This works for installs made with `cargo install` from a clone of the repository: the app remembers that clone.
+It only ever fast-forwards (nothing of yours in the clone is overwritten) and needs `git` and `cargo`. A copy
+installed by a package manager is updated by that package manager instead.
+
 ### Settings
 
 Settings (the gear) has eight sections: **General** (profile, display mode, start with your computer or minimized,
 tracking when the app opens), **Keybinds** (every key and controller button in one place), **Overlay** (the
 status light's corner and how solid it is, which parts of the in-game panel show, extra game-window names),
 **Capture**, **Rocket League** (game folder, Stats API), **Tracking** (what to collect), **Data** (files, wipe
-data, run the setup again) and **About**.
+data, run the setup again, and a full **Reset** to start like a new user) and **About**.
 
 ### Capturing: screenshots, clips and match recordings
 
